@@ -4,13 +4,7 @@ This project attempts to build a simple Whisper CLI with Rust, to replace the ba
 
 ## Installation
 
-You can install `whisper_cli` by running the following command in your terminal.
-
-```
-curl -fsSL https://raw.githubusercontent.com/m1guelpf/whisper-cli-rs/main/install.sh | sh -
-```
-
-You may need to close and reopen your terminal after installation. Alternatively, you can download the binary corresponding to your OS from the [latest release](https://github.com/m1guelpf/whisper-cli-rs/releases/latest).
+You can download the binary corresponding to your OS from the [latest release](https://github.com/m1guelpf/whisper-cli-rs/releases/latest), or build it from scratch by cloning the repo and running `cargo build --release`.
 
 ## Usage
 
