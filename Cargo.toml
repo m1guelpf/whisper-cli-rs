@@ -18,7 +18,8 @@ indicatif = "0.17.2"
 futures-util = "0.3.25"
 uuid = { version = "1.2.2", features = ["v4"] }
 tokio = { version = "1.23.0", features = ["full"] }
+clap = { version = "4.0.32", features = ["derive"] }
 serde = { version = "1.0.151", features = ["derive"] }
 reqwest = { version = "0.11.13", features = ["blocking", "stream"] }
 audrey = { version = "0.3.0", default-features = false, features = ["wav"] }
-whisper-rs = { git = "https://github.com/alugha/whisper-rs.git", branch = "missing-symbols" }
+whisper-rs = { git = "https://github.com/m1guelpf/whisper-rs-bindings.git" }
