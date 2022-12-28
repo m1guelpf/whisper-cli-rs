@@ -8,7 +8,34 @@ You can download the binary corresponding to your OS from the [latest release](h
 
 ## Usage
 
-Run the CLI tool with `whisper_cli <audio_file>`. It'll transcribe the audio with the selected model (downloading it first if it doesn't exist), and generate `<audio_file>.txt` (a full transcription) and subtitle files in various formats (`<audio_file>.vtt` and `<audio_file>.srt`).
+```bash
+$ whisper_cli --help
+Generate a transcript of an audio file using the Whisper speech-to-text engine. The transcript will be saved as a .txt, .vtt, and .srt file in the same directory as the audio file.
+
+Usage: whisper_cli [OPTIONS] <AUDIO>
+
+Arguments:
+  <AUDIO> Path to the audio file to transcribe
+
+Options:
+  -m, --model <MODEL>
+          Name of the Whisper model to use
+
+          [default: medium]
+          [possible values: tiny.en, tiny, base.en, base, small.en, small, medium.en, medium, large, large-v1]
+
+  -l, --lang <LANG>
+          Language spoken in the audio. Attempts to auto-detect by default
+
+          [default: auto]
+          [possible values: auto, en, zh, de, es, ru, ko, fr, ja, pt, tr, pl, ca, nl, ar, sv, it, id, hi, fi, vi, he, uk, el, ms, cs, ro, da, hu, ta, no, th, ur, hr, bg, lt, la, mi, ml, cy, sk, te, fa, lv, bn, sr, az, sl, kn, et, mk, br, eu, is, hy, ne, mn, bs, kk, sq, sw, gl, mr, pa, si, km, sn, yo, so, af, oc, ka, be, tg, sd, gu, am, yi, lo, uz, fo, ht, ps, tk, nn, mt, sa, lb, my, bo, tl, mg, as, tt, haw, ln, ha, ba, jw, su]
+
+  -h, --help
+          Print help information (use `-h` for a summary)
+
+  -V, --version
+          Print version information
+```
 
 ## Develop
 

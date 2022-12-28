@@ -16,7 +16,12 @@ mod utils;
 mod whisper;
 
 #[derive(Parser)]
-#[command(author, version, about, long_about = None)]
+#[command(
+    author,
+    version,
+    about = "Locally transcribe audio files, using Whisper.",
+    long_about = "Generate a transcript of an audio file using the Whisper speech-to-text engine. The transcript will be saved as a .txt, .vtt, and .srt file in the same directory as the audio file."
+)]
 struct Args {
     /// Name of the Whisper model to use
     #[clap(short, long, default_value = "medium")]
