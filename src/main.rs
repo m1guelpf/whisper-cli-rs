@@ -1,19 +1,12 @@
 #![warn(clippy::all, clippy::pedantic, clippy::nursery)]
 
-use crate::{
-    model::{Model, Size},
-    whisper::Whisper,
-};
 use clap::Parser;
 use std::path::Path;
 use utils::write_to;
-use whisper::Language;
 
-mod ffmpeg_decoder;
-mod model;
-mod transcript;
 mod utils;
-mod whisper;
+
+use whisper_cli::{Language, Model, Size, Whisper};
 
 #[derive(Parser)]
 #[command(
@@ -41,17 +34,16 @@ async fn main() {
     let audio = Path::new(&args.audio);
     let file_name = audio.file_name().unwrap().to_str().unwrap();
 
-    if !audio.exists() {
-        panic!("The provided audio file does not exist.");
-    }
+    assert!(audio.exists(), "The provided audio file does not exist.");
 
     if args.model.is_english_only() && args.lang == Language::Auto {
         args.lang = Language::English;
     }
 
-    if args.model.is_english_only() && args.lang != Language::English {
-        panic!("The selected model only supports English.");
-    }
+    assert!(
+        !args.model.is_english_only() || args.lang == Language::English,
+        "The selected model only supports English."
+    );
 
     let mut whisper = Whisper::new(Model::new(args.model), args.lang).await;
     let transcript = whisper.transcribe(audio).unwrap();

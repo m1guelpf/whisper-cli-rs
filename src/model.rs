@@ -27,7 +27,7 @@ pub enum Size {
 }
 
 impl Size {
-    pub fn get_path(&self) -> PathBuf {
+    pub fn get_path(self) -> PathBuf {
         let mut path = cache_dir().expect("Could not find cache directory");
         path.push("whisper");
         path.push("models");
@@ -36,7 +36,7 @@ impl Size {
         path
     }
 
-    pub fn is_english_only(&self) -> bool {
+    pub const fn is_english_only(self) -> bool {
         matches!(
             self,
             Self::TinyEnglish | Self::BaseEnglish | Self::SmallEnglish | Self::MediumEnglish

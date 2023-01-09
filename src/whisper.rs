@@ -211,9 +211,10 @@ pub enum Language {
     Sundanese,
 }
 
-impl Into<&str> for Language {
-    fn into(self) -> &'static str {
-        match self {
+impl From<Language> for &str {
+    #[allow(clippy::too_many_lines)]
+    fn from(val: Language) -> Self {
+        match val {
             Language::Auto => "auto",
             Language::English => "en",
             Language::Chinese => "zh",
