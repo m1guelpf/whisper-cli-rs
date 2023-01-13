@@ -335,9 +335,9 @@ impl Whisper {
         }
     }
 
-    pub fn transcribe<P: AsRef<Path>>(&mut self, audio: P) -> Result<Transcript> {
+    pub fn transcribe<P: AsRef<Path>>(&mut self, audio: P, translate: bool) -> Result<Transcript> {
         let mut params = FullParams::new(SamplingStrategy::Greedy { n_past: 0 });
-        params.set_translate(true);
+        params.set_translate(translate);
         params.set_print_special(false);
         params.set_print_progress(false);
         params.set_print_realtime(false);

@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 use futures_util::StreamExt;
 use indicatif::{ProgressBar, ProgressStyle};
 use num::integer::div_floor;
