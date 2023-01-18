@@ -6,6 +6,12 @@ This project attempts to build a simple Whisper CLI with Rust, to replace the ba
 
 You can download the binary corresponding to your OS from the [latest release](https://github.com/m1guelpf/whisper-cli-rs/releases/latest), or build it from scratch by cloning the repo and running `cargo build --release`.
 
+## Run from anywhere
+
+Put the `whisper_cli` binary in `/usr/local/bin` on Unix systems (Mac/Linux) & make sure it has permissions to execute (use `chmod +x whisper_cli` in terminal.)
+
+Close & Re-open the terminal to test it by typing `whisper_cli --help`. It should output the following.
+
 ## Usage
 
 ```bash
