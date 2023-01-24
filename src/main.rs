@@ -26,6 +26,10 @@ struct Args {
 
     /// Path to the audio file to transcribe
     audio: String,
+
+    /// Toggle translation
+    #[clap(short, long, default_value = "false")]
+    translate: bool,
 }
 
 #[tokio::main]
@@ -46,7 +50,7 @@ async fn main() {
     );
 
     let mut whisper = Whisper::new(Model::new(args.model), args.lang).await;
-    let transcript = whisper.transcribe(audio).unwrap();
+    let transcript = whisper.transcribe(audio, args.translate).unwrap();
 
     write_to(
         audio.with_file_name(format!("{file_name}.txt")),
