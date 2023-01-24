@@ -1480,16 +1480,15 @@ dependencies = [
 [[package]]
 name = "whisper-rs"
 version = "0.3.0"
-source = "git+https://github.com/jmfrank63/whisper-rs-bindings.git#7224d4735046de7356cf0a6248105a6e2e937834"
+source = "git+https://github.com/m1guelpf/whisper-rs-bindings.git#7dbc8aa315443d79e23e1875131e7452f43cca3d"
 dependencies = [
- "hound",
  "whisper-rs-sys",
 ]
 
 [[package]]
 name = "whisper-rs-sys"
 version = "0.2.0"
-source = "git+https://github.com/jmfrank63/whisper-rs-bindings.git#7224d4735046de7356cf0a6248105a6e2e937834"
+source = "git+https://github.com/m1guelpf/whisper-rs-bindings.git#7dbc8aa315443d79e23e1875131e7452f43cca3d"
 dependencies = [
  "bindgen",
 ]
