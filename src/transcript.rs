@@ -5,8 +5,9 @@ use crate::utils::format_timestamp;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Transcript {
-    pub utterances: Vec<Utternace>,
     pub processing_time: Duration,
+    pub utterances: Vec<Utternace>,
+    pub word_utterances: Option<Vec<Utternace>>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -26,7 +27,9 @@ impl Transcript {
     }
 
     pub fn as_vtt(&self) -> String {
-        self.utterances
+        self.word_utterances
+            .as_ref()
+            .unwrap_or(&self.utterances)
             .iter()
             .fold(String::new(), |transcript, fragment| {
                 transcript
@@ -41,7 +44,9 @@ impl Transcript {
     }
 
     pub fn as_srt(&self) -> String {
-        self.utterances
+        self.word_utterances
+            .as_ref()
+            .unwrap_or(&self.utterances)
             .iter()
             .fold((1, String::new()), |(i, transcript), fragment| {
                 (

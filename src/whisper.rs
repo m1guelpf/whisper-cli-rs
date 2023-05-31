@@ -335,13 +335,20 @@ impl Whisper {
         }
     }
 
-    pub fn transcribe<P: AsRef<Path>>(&mut self, audio: P, translate: bool) -> Result<Transcript> {
+    pub fn transcribe<P: AsRef<Path>>(
+        &mut self,
+        audio: P,
+        translate: bool,
+        word_timestamps: bool,
+    ) -> Result<Transcript> {
         let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
+
         params.set_translate(translate);
         params.set_print_special(false);
         params.set_print_progress(false);
         params.set_print_realtime(false);
         params.set_print_timestamps(false);
+        params.set_token_timestamps(word_timestamps);
         params.set_language(self.lang.map(Into::into));
 
         let audio = ffmpeg_decoder::read_file(audio)?;
@@ -355,28 +362,53 @@ impl Whisper {
             return Err(anyhow!("No segments found"));
         };
 
+        let mut words = Vec::new();
         let mut utterances = Vec::new();
-        for i in 0..num_segments {
-            let segment = state
-                .full_get_segment_text(i)
+        for s in 0..num_segments {
+            let text = state
+                .full_get_segment_text(s)
                 .map_err(|e| anyhow!("failed to get segment due to {:?}", e))?;
-            let start_timestamp = state
-                .full_get_segment_t0(i)
+            let start = state
+                .full_get_segment_t0(s)
                 .map_err(|e| anyhow!("failed to get segment due to {:?}", e))?;
-            let end_timestamp = state
-                .full_get_segment_t1(i)
+            let stop = state
+                .full_get_segment_t1(s)
                 .map_err(|e| anyhow!("failed to get segment due to {:?}", e))?;
 
-            utterances.push(Utternace {
-                start: start_timestamp,
-                stop: end_timestamp,
-                text: segment,
-            });
+            utterances.push(Utternace { text, start, stop });
+
+            if !word_timestamps {
+                continue;
+            }
+
+            let num_tokens = state
+                .full_n_tokens(s)
+                .map_err(|e| anyhow!("failed to get segment due to {:?}", e))?;
+
+            for t in 0..num_tokens {
+                let text = state
+                    .full_get_token_text(s, t)
+                    .map_err(|e| anyhow!("failed to get token due to {:?}", e))?;
+                let token_data = state
+                    .full_get_token_data(s, t)
+                    .map_err(|e| anyhow!("failed to get token due to {:?}", e))?;
+
+                if text.starts_with("[_") {
+                    continue;
+                }
+
+                words.push(Utternace {
+                    text,
+                    start: token_data.t0,
+                    stop: token_data.t1,
+                });
+            }
         }
 
         Ok(Transcript {
             utterances,
             processing_time: Instant::now().duration_since(st),
+            word_utterances: if word_timestamps { Some(words) } else { None },
         })
     }
 }
