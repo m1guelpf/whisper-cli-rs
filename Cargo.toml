@@ -11,6 +11,10 @@ authors = ["Miguel Piedrafita <soy@miguelpiedrafita.com>"]
 keywords = ["whisper", "openai", "cli", "transcribe"]
 categories = ["command-line-utilities"]
 
+[[bin]]
+name = "whisper"
+path = "src/main.rs"
+
 [dependencies]
 dirs = "5.0"
 num = "0.4.0"

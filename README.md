@@ -4,21 +4,21 @@ This project attempts to build a simple Whisper CLI with Rust, to replace the ba
 
 ## Installation
 
-You can download the binary corresponding to your OS from the [latest release](https://github.com/m1guelpf/whisper-cli-rs/releases/latest), or build it from scratch by cloning the repo and running `cargo build --release`.
+You can download the binary corresponding to your OS from the [latest release](https://github.com/m1guelpf/whisper-cli-rs/releases/latest), or build it from scratch with `cargo install whisper_cli`.
 
 ## Run from anywhere
 
-Put the `whisper_cli` binary in `/usr/local/bin` on Unix systems (Mac/Linux) & make sure it has permissions to execute (use `chmod +x whisper_cli` in terminal.)
+Put the `whisper` binary in `/usr/local/bin` on Unix systems (Mac/Linux) & make sure it has permissions to execute (use `chmod +x whisper` in terminal.)
 
-Close & Re-open the terminal to test it by typing `whisper_cli --help`. It should output the following.
+Close & Re-open the terminal to test it by typing `whisper --help`. It should output the following.
 
 ## Usage
 
 ```bash
-$ whisper_cli --help
+$ whisper --help
 Generate a transcript of an audio file using the Whisper speech-to-text engine. The transcript will be saved as a .txt, .vtt, and .srt file in the same directory as the audio file.
 
-Usage: whisper_cli [OPTIONS] <AUDIO>
+Usage: whisper [OPTIONS] <AUDIO>
 
 Arguments:
   <AUDIO> Path to the audio file to transcribe
@@ -33,8 +33,13 @@ Options:
   -l, --lang <LANG>
           Language spoken in the audio. Attempts to auto-detect by default
 
-          [default: auto]
           [possible values: auto, en, zh, de, es, ru, ko, fr, ja, pt, tr, pl, ca, nl, ar, sv, it, id, hi, fi, vi, he, uk, el, ms, cs, ro, da, hu, ta, no, th, ur, hr, bg, lt, la, mi, ml, cy, sk, te, fa, lv, bn, sr, az, sl, kn, et, mk, br, eu, is, hy, ne, mn, bs, kk, sq, sw, gl, mr, pa, si, km, sn, yo, so, af, oc, ka, be, tg, sd, gu, am, yi, lo, uz, fo, ht, ps, tk, nn, mt, sa, lb, my, bo, tl, mg, as, tt, haw, ln, ha, ba, jw, su]
+
+  -t, --translate
+          Toggle translation
+
+  -k, --karaoke
+          Generate timestamps for each word
 
   -h, --help
           Print help information (use `-h` for a summary)
