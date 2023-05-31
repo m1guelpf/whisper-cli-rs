@@ -104,12 +104,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dfb24e866b15a1af2a1b663f10c6b6b8f397a84aadb828f12e5b289ec23a3a3c"
 
 [[package]]
-name = "cache-padded"
-version = "1.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "981520c98f422fcc584dc1a95c334e6953900b9106bc47a9839b81790009eb21"
-
-[[package]]
 name = "cc"
 version = "1.0.78"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1332,15 +1326,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "rtrb"
-version = "0.2.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "99e704dd104faf2326a320140f70f0b736d607c1caa1b1748a6c568a79819109"
-dependencies = [
- "cache-padded",
-]
-
-[[package]]
 name = "rustc-hash"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1893,7 +1878,6 @@ dependencies = [
  "num",
  "reqwest",
  "ringbuf",
- "rtrb",
  "serde",
  "tokio",
  "uuid",
