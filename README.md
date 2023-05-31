@@ -1,4 +1,17 @@
-# A Whisper CLI, built with Rust
+<div align="center">
+  <h1>A Whisper CLI, built with Rust</h1>
+
+  <a href="https://crates.io/crates/whisper_cli">
+    <img src="https://img.shields.io/crates/v/whisper_cli.svg" alt="crates.io" />
+  </a>
+  <a href="https://crates.io/crates/whisper_cli">
+    <img src="https://img.shields.io/crates/d/whisper_cli.svg" alt="download count badge" />
+  </a>
+  <a href="https://docs.rs/whisper_cli">
+    <img src="https://img.shields.io/badge/docs-latest-blue.svg" alt="docs.rs" />
+  </a>
+  <br /></br />
+</div>
 
 This project attempts to build a simple Whisper CLI with Rust, to replace the base Python one. It uses [whisper.cpp](https://github.com/ggerganov/whisper.cpp) under the hood, making it significantly faster on M1 systems.
 
