@@ -51,12 +51,18 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-
 
-      - name: Build
-        run: cargo build --release
+      - name: Publish Crate
+        uses: katyo/publish-crates@v2
+        with:
+          args: --allow-dirty
+          registry-token: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
       - name: Install cargo-deb
         run: cargo install cargo-deb
         continue-on-error: true
+
+      - name: Build
+        run: cargo build --release
 
       - name: Create deb package
         run: cargo deb
