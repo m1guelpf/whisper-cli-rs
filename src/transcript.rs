@@ -11,6 +11,13 @@ pub struct Transcript {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+pub struct PartialTranscript {
+    pub text: String,
+    pub offset: usize,
+    pub utterances: Vec<Utternace>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Utternace {
     pub start: i64,
     pub stop: i64,

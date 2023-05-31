@@ -1,6 +1,8 @@
 #![warn(clippy::all, clippy::pedantic, clippy::nursery)]
 
 use clap::Parser;
+use cpal::traits::HostTrait;
+use futures_util::{pin_mut, StreamExt};
 use std::path::Path;
 use utils::write_to;
 
@@ -25,7 +27,7 @@ struct Args {
     lang: Option<Language>,
 
     /// Path to the audio file to transcribe
-    audio: String,
+    audio: Option<String>,
 
     /// Toggle translation
     #[clap(short, long, default_value = "false")]
@@ -34,15 +36,20 @@ struct Args {
     /// Generate timestamps for each word
     #[clap(short, long, default_value = "false")]
     karaoke: bool,
+
+    /// Stream audio from a microphone
+    #[clap(short, long, default_value = "false")]
+    stream: bool,
 }
 
 #[tokio::main]
+#[allow(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss
+)]
 async fn main() {
     let mut args = Args::parse();
-    let audio = Path::new(&args.audio);
-    let file_name = audio.file_name().unwrap().to_str().unwrap();
-
-    assert!(audio.exists(), "The provided audio file does not exist.");
 
     if args.model.is_english_only() && (args.lang == Some(Language::Auto) || args.lang.is_none()) {
         args.lang = Some(Language::English);
@@ -54,10 +61,46 @@ async fn main() {
     );
 
     let mut whisper = Whisper::new(Model::new(args.model), args.lang).await;
+
+    if args.stream {
+        assert!(
+            args.audio.is_none(),
+            "Cannot stream and transcribe an audio file at the same time."
+        );
+
+        let host = cpal::default_host();
+        let device = host
+            .default_input_device()
+            .expect("Failed to get default input device.");
+
+        let stream = whisper.listen(device).unwrap();
+        pin_mut!(stream);
+
+        while let Some(Ok(chunk)) = stream.next().await {
+            // if chunk.offset > 0 {
+            //     print!(
+            //         "\x1B[{}D{}\x1B[{}D",
+            //         chunk.offset,
+            //         " ".repeat(chunk.offset),
+            //         chunk.offset
+            //     );
+            // }
+
+            print!("{}", chunk.text);
+            // std::io::stdout().flush().unwrap();
+        }
+    }
+
+    let Some(audio) = args.audio else { panic!("Please provide a path to an audio file.") };
+
+    let audio = Path::new(&audio);
+    assert!(audio.exists(), "The provided audio file does not exist.");
+
     let transcript = whisper
         .transcribe(audio, args.translate, args.karaoke)
         .unwrap();
 
+    let file_name = audio.file_name().unwrap().to_str().unwrap();
     write_to(
         audio.with_file_name(format!("{file_name}.txt")),
         &transcript.as_text(),
