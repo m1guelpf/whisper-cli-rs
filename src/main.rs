@@ -21,8 +21,8 @@ struct Args {
     model: Size,
 
     /// Language spoken in the audio. Attempts to auto-detect by default.
-    #[clap(short, long, default_value = "auto")]
-    lang: Language,
+    #[clap(short, long)]
+    lang: Option<Language>,
 
     /// Path to the audio file to transcribe
     audio: String,
@@ -40,12 +40,12 @@ async fn main() {
 
     assert!(audio.exists(), "The provided audio file does not exist.");
 
-    if args.model.is_english_only() && args.lang == Language::Auto {
-        args.lang = Language::English;
+    if args.model.is_english_only() && (args.lang == Some(Language::Auto) || args.lang.is_none()) {
+        args.lang = Some(Language::English);
     }
 
     assert!(
-        !args.model.is_english_only() || args.lang == Language::English,
+        !args.model.is_english_only() || args.lang == Some(Language::English),
         "The selected model only supports English."
     );
 

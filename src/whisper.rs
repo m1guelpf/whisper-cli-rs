@@ -320,12 +320,12 @@ impl From<Language> for &str {
 }
 
 pub struct Whisper {
-    lang: Language,
     ctx: WhisperContext,
+    lang: Option<Language>,
 }
 
 impl Whisper {
-    pub async fn new(model: Model, lang: Language) -> Self {
+    pub async fn new(model: Model, lang: Option<Language>) -> Self {
         model.download().await;
 
         Self {
@@ -336,32 +336,36 @@ impl Whisper {
     }
 
     pub fn transcribe<P: AsRef<Path>>(&mut self, audio: P, translate: bool) -> Result<Transcript> {
-        let mut params = FullParams::new(SamplingStrategy::Greedy { n_past: 0 });
+        let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
         params.set_translate(translate);
         params.set_print_special(false);
         params.set_print_progress(false);
         params.set_print_realtime(false);
         params.set_print_timestamps(false);
-        params.set_language(self.lang.into());
+        params.set_language(self.lang.map(Into::into));
 
         let audio = ffmpeg_decoder::read_file(audio)?;
 
         let st = Instant::now();
-        self.ctx.full(params, &audio).expect("Failed to transcribe");
+        let mut state = self.ctx.create_state().expect("failed to create state");
+        state.full(params, &audio).expect("failed to transcribe");
 
-        let num_segments = self.ctx.full_n_segments();
+        let num_segments = state.full_n_segments().expect("failed to get segments");
         if num_segments == 0 {
             return Err(anyhow!("No segments found"));
         };
 
         let mut utterances = Vec::new();
         for i in 0..num_segments {
-            let segment = self
-                .ctx
+            let segment = state
                 .full_get_segment_text(i)
                 .map_err(|e| anyhow!("failed to get segment due to {:?}", e))?;
-            let start_timestamp = self.ctx.full_get_segment_t0(i);
-            let end_timestamp = self.ctx.full_get_segment_t1(i);
+            let start_timestamp = state
+                .full_get_segment_t0(i)
+                .map_err(|e| anyhow!("failed to get segment due to {:?}", e))?;
+            let end_timestamp = state
+                .full_get_segment_t1(i)
+                .map_err(|e| anyhow!("failed to get segment due to {:?}", e))?;
 
             utterances.push(Utternace {
                 start: start_timestamp,
