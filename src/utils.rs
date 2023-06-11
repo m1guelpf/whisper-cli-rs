@@ -48,7 +48,7 @@ pub async fn download_file(url: &str, path: &str) {
 
 pub fn format_timestamp(seconds: i64, always_include_hours: bool, decimal_marker: &str) -> String {
     assert!(seconds >= 0, "non-negative timestamp expected");
-    let mut milliseconds = seconds * 1000;
+    let mut milliseconds = seconds * 10;
 
     let hours = div_floor(milliseconds, 3_600_000);
     milliseconds -= hours * 3_600_000;
