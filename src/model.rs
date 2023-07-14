@@ -89,7 +89,7 @@ impl Model {
 
         download_file(
             &format!(
-                "https://huggingface.co/datasets/ggerganov/whisper.cpp/resolve/main/ggml-{}.bin",
+                "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-{}.bin",
                 self.size
             ),
             path.to_str().unwrap(),
