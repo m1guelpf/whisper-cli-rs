@@ -16,15 +16,15 @@ name = "whisper"
 path = "src/main.rs"
 
 [dependencies]
-dirs = "5.0"
-num = "0.4.0"
-anyhow = "1.0.68"
-indicatif = "0.17.2"
+num = "0.4.1"
+dirs = "5.0.1"
+anyhow = "1.0.75"
+indicatif = "0.17.6"
 whisper-rs = "0.8.0"
-futures-util = "0.3.25"
-uuid = { version = "1.2.2", features = ["v4"] }
-tokio = { version = "1.23.0", features = ["full"] }
-clap = { version = "4.0.32", features = ["derive"] }
-serde = { version = "1.0.151", features = ["derive"] }
-reqwest = { version = "0.11.13", features = ["blocking", "stream"] }
+futures-util = "0.3.28"
+uuid = { version = "1.4.1", features = ["v4"] }
+tokio = { version = "1.32.0", features = ["full"] }
+clap = { version = "4.4.3", features = ["derive"] }
+serde = { version = "1.0.188", features = ["derive"] }
+reqwest = { version = "0.11.20", features = ["blocking", "stream"] }
 audrey = { version = "0.3.0", default-features = false, features = ["wav"] }
