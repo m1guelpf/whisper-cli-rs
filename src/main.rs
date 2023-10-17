@@ -98,7 +98,7 @@ async fn start_server(port: u16) {
 }
 
 async fn handle_transcription(
-    form: warp::multipart::FormData,
+    _form: warp::multipart::FormData,
 ) -> Result<impl warp::Reply, warp::Rejection> {
     // Handle the uploaded file and parameters from the multipart form.
     // For simplicity, I'm providing a placeholder response here.
