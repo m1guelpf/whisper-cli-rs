@@ -49,20 +49,22 @@ pub fn read_file<P: AsRef<Path>>(audio_file_path: P) -> Result<Vec<f32>> {
     } else {
         println!("ffmpeg not found. Using hound decoder as fallback");
         let mut reader = hound::WavReader::open(audio_file_path)?;
-    
+
         // Convert i16 samples to f32 and normalize to [-1.0, 1.0]
         let samples: Vec<f32> = reader
             .samples::<i16>()
             .map(|s| s.unwrap() as f32 / std::i16::MAX as f32)
             .collect();
-        
+
         Ok(samples)
     }
-
 }
 
 fn is_ffmpeg_available() -> bool {
-    match std::process::Command::new("ffmpeg").arg("-version").status() {
+    match std::process::Command::new("ffmpeg")
+        .arg("-version")
+        .status()
+    {
         Ok(status) => status.success(),
         Err(_) => false,
     }
