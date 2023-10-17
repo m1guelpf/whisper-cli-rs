@@ -73,9 +73,6 @@ struct TranscribeArgs {
 
 #[tokio::main]
 async fn main() {
-    for arg in std::env::args() {
-        println!("{}", arg);
-    }
     let opts = Opts::parse();
     match opts.subcmd {
         SubCommand::Serve { port } => start_server(port).await,
