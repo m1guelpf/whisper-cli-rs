@@ -104,15 +104,22 @@ jobs:
             target/
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-
+      
+      - name: Add aarch64 target
+        run: rustup target add aarch64-apple-darwin
 
-      - name: Build
+      - name: Build for Mac with Intel
         run: cargo build --release
+
+      - name: Build for Apple Silicon
+        run: cargo build --release --target=aarch64-apple-darwin
 
       - name: "Move to outputs/ folder"
         run: |
           mkdir outputs
           cp target/release/whisper outputs/whisper-darwin-x86_64
-
+          cp target/aarch64-apple-darwin/release/whisper outputs/whisper-darwin-aarch64
+      
       - name: Upload to temporary storage
         uses: actions/upload-artifact@master
         with:
