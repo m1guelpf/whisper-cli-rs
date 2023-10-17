@@ -6,3 +6,12 @@
 **/*.rs.bk
 
 .DS_Store
+
+# transcriptions outputs
+*.vtt
+*.txt
+*.srt
+
+# inputs files
+*.wav
+*.mp3
