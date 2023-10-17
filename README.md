@@ -63,7 +63,22 @@ Options:
 
 ## Develop
 
-Make sure you have the latest version of rust installed (use [rustup](https://rustup.rs/)). Then, you can build the project by running `cargo build`, and run it with `cargo run`.
+### Requirements
+
+- **rust**: Make sure you have the latest version of rust installed (use [rustup](https://rustup.rs/))
+- **cmake**: If you are on Mac, you can install it with `brew install cmake`
+
+### Build
+
+```sh
+cargo build
+```
+
+### Run
+
+```sh
+cargo run
+```
 
 ## License
 
