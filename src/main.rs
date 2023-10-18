@@ -1,9 +1,14 @@
 #![warn(clippy::all, clippy::pedantic, clippy::nursery)]
 
 use clap::Parser;
+use hyper::service::{make_service_fn, service_fn};
+use hyper::{header::CONTENT_TYPE, Body, Request, Response, Server, StatusCode};
+use multer::Multipart;
 use serde::Serialize;
+use serde_json::to_string;
+use std::fs;
 use std::path::Path;
-use warp::{self, Filter};
+use std::{convert::Infallible, net::SocketAddr};
 use whisper_cli::{Language, Model, Size, Whisper};
 
 use crate::utils::write_to;
@@ -14,17 +19,6 @@ mod utils;
 struct TranscriptionResponse {
     text: String,
 }
-
-/* 
-#[derive(Deserialize)]
-struct TranscriptionRequest {
-    model: Option<String>,
-    language: Option<String>,
-    prompt: Option<String>,
-    response_format: Option<String>,
-    temperature: Option<f32>,
-} 
-*/
 
 #[derive(Parser)]
 struct Opts {
@@ -81,34 +75,104 @@ async fn main() {
 }
 
 async fn start_server(port: u16) {
-    // Define the API endpoint
-    let transcription = warp::post()
-        .and(warp::path("v1"))
-        .and(warp::path("audio"))
-        .and(warp::path("transcriptions"))
-        .and(warp::multipart::form())
-        .and_then(handle_transcription);
+    let addr = SocketAddr::from(([127, 0, 0, 1], port));
+    let make_svc =
+        make_service_fn(|_conn| async { Ok::<_, Infallible>(service_fn(handle_transcription)) });
+    let server = Server::bind(&addr).serve(make_svc);
 
-    let routes = transcription;
-
-    warp::serve(routes).run(([0, 0, 0, 0], port)).await;
+    println!("🏃‍♀️ Server running at: {}", addr);
+    if let Err(e) = server.await {
+        eprintln!("server error: {}", e);
+    }
 }
 
-async fn handle_transcription(
-    _form: warp::multipart::FormData,
-) -> Result<impl warp::Reply, warp::Rejection> {
-    // Handle the uploaded file and parameters from the multipart form.
-    // For simplicity, I'm providing a placeholder response here.
-    // You'd replace this with the actual transcription logic.
-    Ok(warp::reply::json(&format!(
-        "{{
-          \"text\": \"Transcription placeholder for uploaded audio.\"
-      }}"
-    )))
+// A handler for incoming requests.
+async fn handle_transcription(req: Request<Body>) -> Result<Response<Body>, Infallible> {
+    // Extract the `multipart/form-data` boundary from the headers.
+    let boundary = req
+        .headers()
+        .get(CONTENT_TYPE)
+        .and_then(|ct| ct.to_str().ok())
+        .and_then(|ct| multer::parse_boundary(ct).ok());
+
+    // Send `BAD_REQUEST` status if the content-type is not multipart/form-data.
+    if boundary.is_none() {
+        return Ok(Response::builder()
+            .status(StatusCode::BAD_REQUEST)
+            .body(Body::from("BAD REQUEST"))
+            .unwrap());
+    }
+
+    // Process the multipart e.g. you can store them in files.
+    let transcription_request = process_multipart(req.into_body(), boundary.unwrap()).await;
+
+    if let Ok(trans_req) = transcription_request {
+        let audio = Path::new(trans_req.as_str());
+        let mut whisper =
+            Whisper::new(Model::new(Size::TinyEnglish), Some(Language::English)).await;
+        let transcript = whisper.transcribe(audio, false, false).unwrap();
+        println!("time: {:?}", transcript.processing_time);
+
+        let transcript_text = transcript.as_text();
+        let response: TranscriptionResponse = TranscriptionResponse {
+            text: transcript_text,
+        };
+
+        let json_response = to_string(&response).expect("Failed to serialize to JSON");
+
+        return Ok(Response::new(Body::from(json_response)));
+    } else if let Err(err) = transcription_request {
+        return Ok(Response::builder()
+            .status(StatusCode::INTERNAL_SERVER_ERROR)
+            .body(Body::from(format!("INTERNAL SERVER ERROR: {}", err)))
+            .unwrap());
+    }
+
+    Ok(Response::new(Body::from("Success")))
+}
+
+// Process the request body as multipart/form-data.
+async fn process_multipart(body: Body, boundary: String) -> multer::Result<String> {
+    // Create a Multipart instance from the request body.
+    let mut multipart = Multipart::new(body, boundary);
+    let mut file_path = String::new();
+
+    // Iterate over the fields, `next_field` method will return the next field if
+    // available.
+    while let Some(mut field) = multipart.next_field().await? {
+        if field.name() == Some("file") {
+            // Get the field name.
+            let name = field.name();
+
+            // Get the field's filename if provided in "Content-Disposition" header.
+            let file_name = field.file_name();
+
+            // Get the "Content-Type" header as `mime::Mime` type.
+            let content_type = field.content_type();
+
+            println!(
+                "Name: {:?}, FileName: {:?}, Content-Type: {:?}",
+                name, file_name, content_type
+            );
+            // Process the field data chunks e.g. store them in a file.
+            let mut bytes_len = 0;
+            let mut audio_data = Vec::new();
+            while let Some(field_chunk) = field.chunk().await? {
+                audio_data.extend_from_slice(&field_chunk);
+                bytes_len += field_chunk.len();
+            }
+            println!("Bytes Length: {:?}", bytes_len);
+            let file_name_str: &str = field.file_name().as_ref().unwrap_or(&"audio.wav");
+            file_path = format!("/tmp/{}", file_name_str); // Adjust as necessary
+            fs::write(&file_path, audio_data).expect("Failed to write to file");
+            println!("Write the file to {}", file_path);
+        }
+    }
+
+    Ok(file_path)
 }
 
 async fn transcribe_audio(mut args: TranscribeArgs) {
-    // Your previous CLI functionality here
     let audio = Path::new(&args.audio);
     let file_name = audio.file_name().unwrap().to_str().unwrap();
 
