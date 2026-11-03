@@ -1302,7 +1302,7 @@ pub async fn run_live_moonshine(config: LiveConfig) -> Result<Transcript> {
     let mut audio_bytes: u64 = 0;
     let mut current_preview: Option<String> = None;
     let mut last_audio_instant = Instant::now();
-    let mut last_committed_id: Option<u64> = None;
+    let mut committed_ids: std::collections::HashSet<u64> = std::collections::HashSet::new();
     let mut all_utterances: Vec<Utternace> = Vec::new();
     let mut last_preview_text: String = String::new();
 
@@ -1318,7 +1318,19 @@ pub async fn run_live_moonshine(config: LiveConfig) -> Result<Transcript> {
                 let Some(samples) = maybe_samples else { break; };
                 let rms = compute_rms(&samples);
                 let pkt_peak = compute_peak(&samples);
-                if pkt_peak >= 0.005 || rms >= 0.005 {
+
+                #[cfg(target_os = "macos")]
+                let ane_conf = unsafe { whisper_macos_speech_permille() } as f32 / 1000.0;
+                #[cfg(not(target_os = "macos"))]
+                let ane_conf = 0.0;
+
+                let has_sound = if config.speech_mode {
+                    ane_conf >= 0.20 || pkt_peak >= 0.02
+                } else {
+                    pkt_peak >= 0.005 || rms >= 0.005
+                };
+
+                if has_sound {
                     last_audio_instant = Instant::now();
                 }
                 current_rms = rms;
@@ -1331,7 +1343,7 @@ pub async fn run_live_moonshine(config: LiveConfig) -> Result<Transcript> {
                 tick = tick.wrapping_add(1);
                 recent_peak *= 0.92;
 
-                let is_quiet = last_audio_instant.elapsed() > Duration::from_millis(600);
+                let is_quiet = last_audio_instant.elapsed() > Duration::from_millis(500);
                 let force_poll = is_quiet && current_preview.is_some();
 
                 if let Ok(transcript) = stream.poll(force_poll) {
@@ -1358,8 +1370,7 @@ pub async fn run_live_moonshine(config: LiveConfig) -> Result<Transcript> {
                         });
 
                         if line.is_complete {
-                            if last_committed_id != Some(line.id) {
-                                last_committed_id = Some(line.id);
+                            if committed_ids.insert(line.id) {
                                 current_preview = None;
                                 last_preview_text.clear();
 
@@ -1387,7 +1398,7 @@ pub async fn run_live_moonshine(config: LiveConfig) -> Result<Transcript> {
                                     let _ = std::io::stderr().flush();
                                 }
                             }
-                        } else {
+                        } else if !committed_ids.contains(&line.id) {
                             if text != last_preview_text {
                                 last_preview_text = text.to_string();
                                 current_preview = Some(format!("[{short_ts}] {text}"));
