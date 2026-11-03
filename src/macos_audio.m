@@ -109,8 +109,6 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
         return;
     }
 
-    atomic_fetch_add(&g_audio_packets, 1);
-
     if (!sampleBuffer || !CMSampleBufferDataIsReady(sampleBuffer)) {
         return;
     }
@@ -182,11 +180,20 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
             return;
         }
         if (CMBlockBufferCopyDataBytes(rawBlock, 0, totalLen, rawBuf) == kCMBlockBufferNoErr) {
-            atomic_fetch_add(&g_audio_bytes, (uint64_t)totalLen);
+            const float *fBuf = (const float *)rawBuf;
             size_t floatCount = totalLen / sizeof(float);
-            if (floatCount > 0) {
-                [self feedSoundAnalyzer:(const float *)rawBuf count:floatCount];
-                self.callback((const float *)rawBuf, floatCount, self.userData);
+            float maxPeak = 0.0f;
+            for (size_t i = 0; i < floatCount; i++) {
+                float a = fabsf(fBuf[i]);
+                if (a > maxPeak) maxPeak = a;
+            }
+            if (floatCount > 0 && maxPeak >= 0.005f) {
+                atomic_fetch_add(&g_audio_packets, 1);
+                atomic_fetch_add(&g_audio_bytes, (uint64_t)totalLen);
+                [self feedSoundAnalyzer:fBuf count:floatCount];
+                self.callback(fBuf, floatCount, self.userData);
+            } else {
+                atomic_store(&g_speech_permille, 0);
             }
         }
         free(rawBuf);
@@ -197,7 +204,6 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
     for (UInt32 b = 0; b < abl->mNumberBuffers; b++) {
         packetBytes += abl->mBuffers[b].mDataByteSize;
     }
-    atomic_fetch_add(&g_audio_bytes, packetBytes);
 
     BOOL isFloat = (asbd->mFormatFlags & kAudioFormatFlagIsFloat) != 0;
     BOOL isSignedInt = (asbd->mFormatFlags & kAudioFormatFlagIsSignedInteger) != 0;
@@ -264,8 +270,25 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
         frames = n;
     }
 
+    // Gate silent / near-empty packets (< 0.005 peak) so we don't accumulate bytes or send empty packets
+    float maxPeak = 0.0f;
+    for (size_t i = 0; i < frames; i++) {
+        float a = fabsf(mono[i]);
+        if (a > maxPeak) maxPeak = a;
+    }
+
+    if (frames == 0 || maxPeak < 0.005f) {
+        atomic_store(&g_speech_permille, 0);
+        free(mono);
+        CFRelease(blockBuffer);
+        return;
+    }
+
+    atomic_fetch_add(&g_audio_packets, 1);
+    atomic_fetch_add(&g_audio_bytes, packetBytes);
+
     // Resample to 16000 Hz if ScreenCaptureKit delivered a different sample rate
-    if (frames > 0 && fabs(srcSampleRate - 16000.0) > 1.0) {
+    if (fabs(srcSampleRate - 16000.0) > 1.0) {
         double ratio = srcSampleRate / 16000.0;
         size_t outFrames = (size_t)((double)frames / ratio);
         if (outFrames > 0) {
@@ -283,7 +306,7 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
                 free(resampled);
             }
         }
-    } else if (frames > 0) {
+    } else {
         [self feedSoundAnalyzer:mono count:frames];
         self.callback(mono, frames, self.userData);
     }

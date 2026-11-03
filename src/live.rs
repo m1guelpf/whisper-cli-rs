@@ -735,6 +735,8 @@ pub async fn run_live_subtitles(
     let mut current_speech_prob: f32 = 0.0;
     let mut recent_peak: f32 = 0.0;
     let mut tick: usize = 0;
+    let mut last_packet_instant = Instant::now();
+    let mut last_speech_instant = Instant::now();
     let mut ui_interval = tokio::time::interval(Duration::from_millis(80));
 
     loop {
@@ -747,6 +749,65 @@ pub async fn run_live_subtitles(
                 break;
             }
             _ = ui_interval.tick() => {
+                let quiet_elapsed = last_packet_instant.elapsed();
+                if quiet_elapsed >= Duration::from_millis(120) {
+                    // No packets >= 0.005 arrived recently; decay meters & clear stale pre-roll
+                    current_rms *= 0.65;
+                    recent_peak *= 0.82;
+                    current_speech_prob *= 0.75;
+                    if current_rms < 0.001 {
+                        current_rms = 0.0;
+                    }
+                    if recent_peak < 0.005 {
+                        recent_peak = 0.0;
+                    }
+                    spark_history.push_back(current_rms);
+                    if spark_history.len() > 16 {
+                        spark_history.pop_front();
+                    }
+                    if !speaking && quiet_elapsed >= Duration::from_millis(450) {
+                        pre_roll.clear();
+                    }
+                }
+
+                // When < 0.005 packets are gated in macos_audio.m, flush active speech once silence duration is reached
+                if speaking {
+                    let elapsed_silence_samples =
+                        (last_speech_instant.elapsed().as_secs_f32() * SAMPLE_RATE as f32) as usize;
+                    let effective_silence = silence_samples.max(elapsed_silence_samples);
+
+                    let natural_pause_ready = speech_buffer.len() >= min_pause_split_samples
+                        && effective_silence >= pause_silence_samples;
+                    let long_sentence_breath_ready = speech_mode
+                        && speech_buffer.len() >= soft_long_sentence_samples
+                        && effective_silence >= breath_pause_samples;
+                    let short_phrase_ready = active_speech_samples >= short_phrase_min_samples
+                        && effective_silence >= long_silence_samples;
+                    let dropped_noise = active_speech_samples < short_phrase_min_samples
+                        && effective_silence >= long_silence_samples;
+
+                    if dropped_noise {
+                        speech_buffer.clear();
+                        speaking = false;
+                        silence_samples = 0;
+                        active_speech_samples = 0;
+                    } else if natural_pause_ready || long_sentence_breath_ready || short_phrase_ready {
+                        let chunk = std::mem::take(&mut speech_buffer);
+                        speaking = false;
+                        silence_samples = 0;
+                        active_speech_samples = 0;
+
+                        if compute_rms(&chunk) >= 0.005 || compute_peak(&chunk) >= 0.015 {
+                            let now_ms = session_start.elapsed().as_millis() as i64;
+                            let _ = segment_tx.try_send(AudioSegment {
+                                samples: chunk,
+                                start_offset_ms: segment_start_ms,
+                                end_offset_ms: now_ms,
+                            });
+                        }
+                    }
+                }
+
                 if !stdout_only {
                     tick = tick.wrapping_add(1);
                     let bytes = unsafe { whisper_macos_audio_bytes_received() };
@@ -770,9 +831,6 @@ pub async fn run_live_subtitles(
                     );
                     eprint!("\r\x1b[2K{hud}");
                     let _ = std::io::stderr().flush();
-
-                    // Decay visual meter slightly when no packets arrived in the last tick
-                    current_rms *= 0.82;
                 }
             }
             maybe_samples = audio_rx.recv() => {
@@ -782,6 +840,12 @@ pub async fn run_live_subtitles(
 
                 let rms = compute_rms(&samples);
                 let pkt_peak = compute_peak(&samples);
+                // Guard against silent packets (< 0.005)
+                if pkt_peak < 0.005 && rms < 0.005 {
+                    continue;
+                }
+
+                last_packet_instant = Instant::now();
                 let ane_conf = unsafe { whisper_macos_speech_permille() } as f32 / 1000.0;
                 let (detected_voice, speech_prob, _vocal_rms) =
                     speech_detector.analyze(&samples, ane_conf);
@@ -806,6 +870,7 @@ pub async fn run_live_subtitles(
                 if !speaking {
                     if frame_has_speech {
                         speaking = true;
+                        last_speech_instant = Instant::now();
                         silence_samples = 0;
                         active_speech_samples = samples.len();
                         let pre_roll_ms = (pre_roll.len() * 1000 / SAMPLE_RATE) as i64;
@@ -826,6 +891,7 @@ pub async fn run_live_subtitles(
                 // Currently in an active speech segment
                 speech_buffer.extend_from_slice(&samples);
                 if frame_has_speech {
+                    last_speech_instant = Instant::now();
                     silence_samples = 0;
                     active_speech_samples += samples.len();
                 } else {
@@ -855,11 +921,13 @@ pub async fn run_live_subtitles(
                     silence_samples = 0;
                     active_speech_samples = 0;
 
-                    let _ = segment_tx.try_send(AudioSegment {
-                        samples: chunk,
-                        start_offset_ms: segment_start_ms,
-                        end_offset_ms: now_ms,
-                    });
+                    if compute_rms(&chunk) >= 0.005 || compute_peak(&chunk) >= 0.015 {
+                        let _ = segment_tx.try_send(AudioSegment {
+                            samples: chunk,
+                            start_offset_ms: segment_start_ms,
+                            end_offset_ms: now_ms,
+                        });
+                    }
                 } else if speech_buffer.len() >= max_chunk_samples {
                     // Reached safety max window: split at quietest micro-pause in last 0.65s
                     let search_win = (0.65 * SAMPLE_RATE as f32) as usize;
@@ -869,11 +937,13 @@ pub async fn run_live_subtitles(
                     let keep_from = split_at.saturating_sub(overlap_samples);
                     let remainder = speech_buffer[keep_from..].to_vec();
 
-                    let _ = segment_tx.try_send(AudioSegment {
-                        samples: chunk,
-                        start_offset_ms: segment_start_ms,
-                        end_offset_ms: now_ms,
-                    });
+                    if compute_rms(&chunk) >= 0.005 || compute_peak(&chunk) >= 0.015 {
+                        let _ = segment_tx.try_send(AudioSegment {
+                            samples: chunk,
+                            start_offset_ms: segment_start_ms,
+                            end_offset_ms: now_ms,
+                        });
+                    }
 
                     speech_buffer = remainder;
                     let rem_ms = (speech_buffer.len() * 1000 / SAMPLE_RATE) as i64;
@@ -886,7 +956,10 @@ pub async fn run_live_subtitles(
     }
 
     // Flush any remaining speech on exit
-    if speaking && active_speech_samples >= short_phrase_min_samples {
+    if speaking
+        && active_speech_samples >= short_phrase_min_samples
+        && (compute_rms(&speech_buffer) >= 0.005 || compute_peak(&speech_buffer) >= 0.015)
+    {
         let now_ms = session_start.elapsed().as_millis() as i64;
         let _ = segment_tx
             .send(AudioSegment {
