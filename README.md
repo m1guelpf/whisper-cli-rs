@@ -6,6 +6,34 @@ Generates transcriptions in `.txt`, `.vtt`, and `.srt` formats automatically.
 
 ---
 
+```
+~/Programming/whisper-cli> whisper --live --speech --preset fast -l es -m large-v3-turbo-q5_0
+🚀 Starting background whisper-server [fast] on port 8080...
+   Command: whisper-server -m /Users/aramsamifanni/.cache/whisper-models/ggml-large-v3-turbo-q5_0.bin --port 8080 -t 8 -fa -mc 0 -sns -l es -nth 0.45 -ac 768 -nf -bo 1 -bs 1
+✅ whisper-server ready in 0.5s!
+
+╭──────────────────────────────────────────────────────────────╮
+│ 🎧 macOS Live System Audio Subtitles (ScreenCaptureKit)      │
+╰──────────────────────────────────────────────────────────────╯
+  • Provider : Custom (http://localhost:8080 • fast preset)
+  • Model    : ggml-large-v3-turbo-q5_0.bin
+  • Subtitles: http://127.0.0.1:8989/events (Browser Injector)
+  • Language : es
+  • Mode     : Smart Speech VAD (waits for sentence end up to 15s, filters SFX/music) (Press Ctrl+C to stop)
+
+[00:44]  Gracias. ¿Qué tal si mejor yo se lo llevo a Kafka?
+[00:48]  No, no hay problema. Yo mismo se lo llevaré.
+[01:06]  Parece que ya lo aprobaron. Pero este será su último año, ¿no? Ah.
+[01:11]  Así es su última vez, aunque ojalá le dieran una oportunidad.
+[01:15]  Se ha esforzado con empeño durante mucho tiempo.
+[01:29]  ambos pasamos el primer examen
+[01:36]  ¿De verdad? ¡Oye!
+[01:38]  Oye, ¿pero por qué te ves así? Jejeje
+[01:41]  ¿Te despertaste de malas, Ichikawa? ¡Pues solo mírate la cara! ¿En serio eres consciente de tu situación actual? Ay, lo siento mucho, es que... A veces se me sale sin que me dé cuenta. 
+```
+
+---
+
 ## Features
 
 - **Native macOS Live Subtitles (`--live`)**: Tap directly into macOS system audio via Apple's `ScreenCaptureKit` (no BlackHole or virtual audio drivers required) for real-time terminal subtitles from Crunchyroll, YouTube, Netflix, or any app.
