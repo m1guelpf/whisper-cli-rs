@@ -503,7 +503,11 @@ pub struct LiveConfig {
     pub sub_port: u16,
 }
 
-pub async fn start_sub_server(port: u16, sub_tx: tokio::sync::broadcast::Sender<String>) {
+pub async fn start_sub_server(
+    port: u16,
+    sub_tx: tokio::sync::broadcast::Sender<String>,
+    history: Arc<tokio::sync::Mutex<VecDeque<serde_json::Value>>>,
+) {
     let addr = format!("127.0.0.1:{port}");
     let listener = match tokio::net::TcpListener::bind(&addr).await {
         Ok(l) => l,
@@ -521,6 +525,7 @@ pub async fn start_sub_server(port: u16, sub_tx: tokio::sync::broadcast::Sender<
             };
 
             let mut sub_rx = sub_tx.subscribe();
+            let history_client = Arc::clone(&history);
             tokio::spawn(async move {
                 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -559,6 +564,25 @@ Connection: close\r\n\
                     return;
                 }
 
+                if first_line.contains("/history") {
+                    let body = {
+                        let hist = history_client.lock().await;
+                        serde_json::to_string(&*hist).unwrap_or_else(|_| "[]".to_string())
+                    };
+                    let resp = format!(
+                        "HTTP/1.1 200 OK\r\n\
+Access-Control-Allow-Origin: *\r\n\
+Content-Type: application/json\r\n\
+Content-Length: {}\r\n\
+Connection: close\r\n\
+\r\n{}",
+                        body.len(),
+                        body
+                    );
+                    let _ = socket.write_all(resp.as_bytes()).await;
+                    return;
+                }
+
                 if first_line.contains("/events") {
                     let header = "HTTP/1.1 200 OK\r\n\
 Content-Type: text/event-stream\r\n\
@@ -572,6 +596,17 @@ retry: 1000\r\n\
 \r\n";
                     if socket.write_all(header.as_bytes()).await.is_err() {
                         return;
+                    }
+
+                    // Send recent history buffer on initial connect so new tabs have previous context
+                    {
+                        let hist = history_client.lock().await;
+                        for cue in hist.iter() {
+                            let sse_chunk = format!("data: {cue}\n\n");
+                            if socket.write_all(sse_chunk.as_bytes()).await.is_err() {
+                                return;
+                            }
+                        }
                     }
 
                     let mut ping_interval = tokio::time::interval(Duration::from_secs(15));
@@ -727,8 +762,9 @@ pub async fn run_live_subtitles(
     let session_start = Instant::now();
 
     let (sub_broadcast_tx, _) = tokio::sync::broadcast::channel::<String>(64);
+    let sub_history = Arc::new(tokio::sync::Mutex::new(VecDeque::<serde_json::Value>::with_capacity(32)));
     if config.sub_port > 0 {
-        start_sub_server(config.sub_port, sub_broadcast_tx.clone()).await;
+        start_sub_server(config.sub_port, sub_broadcast_tx.clone(), Arc::clone(&sub_history)).await;
     }
 
     let is_realtime = config.preset == Some(crate::server::ServerPreset::Realtime);
@@ -829,6 +865,7 @@ pub async fn run_live_subtitles(
     let karaoke = config.karaoke;
     let transcriber_worker = Arc::clone(&transcriber);
     let sub_broadcast_worker = sub_broadcast_tx.clone();
+    let sub_history_worker = Arc::clone(&sub_history);
 
     let worker_handle = tokio::spawn(async move {
         let mut all_utterances: Vec<Utternace> = Vec::new();
@@ -863,6 +900,13 @@ pub async fn run_live_subtitles(
                                 "timestamp": short_ts,
                                 "receivedAt": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis(),
                             });
+                            {
+                                let mut hist = sub_history_worker.lock().await;
+                                if hist.len() >= 25 {
+                                    hist.pop_front();
+                                }
+                                hist.push_back(cue.clone());
+                            }
                             let _ = sub_broadcast_worker.send(cue.to_string());
                             last_printed = subtitle.clone();
                             all_utterances.push(Utternace {
