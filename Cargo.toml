@@ -33,7 +33,16 @@ serde_json = "1.0"
 moonshine-rs = { version = "0.2.6", default-features = false, optional = true }
 reqwest = { version = "0.11.20", features = ["blocking", "stream", "multipart", "json"] }
 audrey = { version = "0.3.0", default-features = false, features = ["wav"] }
+rustc-hash = "2.1"
+mimalloc = { version = "0.1", default-features = false }
 
 [features]
 default = []
 moonshine = ["dep:moonshine-rs"]
+
+[profile.release]
+opt-level = 3
+codegen-units = 1
+panic = "abort"
+strip = true
+

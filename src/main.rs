@@ -1,5 +1,8 @@
 #![warn(clippy::all, clippy::pedantic, clippy::nursery)]
 
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 use anyhow::{anyhow, Result};
 use clap::{Parser, ValueEnum};
 use std::{env, path::Path, sync::Arc};

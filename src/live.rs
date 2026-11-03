@@ -1303,7 +1303,7 @@ pub async fn run_live_moonshine(config: LiveConfig) -> Result<Transcript> {
     let mut audio_bytes: u64 = 0;
     let mut current_preview: Option<String> = None;
     let mut last_audio_instant = Instant::now();
-    let mut committed_ids: std::collections::HashSet<u64> = std::collections::HashSet::new();
+    let mut committed_ids: rustc_hash::FxHashSet<u64> = rustc_hash::FxHashSet::default();
     let mut all_utterances: Vec<Utternace> = Vec::new();
     let mut last_preview_text: String = String::new();
 
