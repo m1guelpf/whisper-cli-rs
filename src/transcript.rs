@@ -10,7 +10,7 @@ pub struct Transcript {
     pub word_utterances: Option<Vec<Utternace>>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Utternace {
     pub start: i64,
     pub stop: i64,

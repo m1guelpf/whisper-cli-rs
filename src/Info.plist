@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleIdentifier</key>
+    <string>com.whispercli.app</string>
+    <key>CFBundleName</key>
+    <string>whisper-cli</string>
+    <key>CFBundleVersion</key>
+    <string>0.1.0</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>NSSpeechRecognitionUsageDescription</key>
+    <string>whisper-cli uses Speech Recognition to transcribe live audio into subtitles in real time.</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>whisper-cli needs audio access to transcribe live system audio.</string>
+</dict>
+</plist>

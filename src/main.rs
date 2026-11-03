@@ -45,13 +45,17 @@ struct Args {
     #[clap(short = 'l', long)]
     lang: Option<String>,
 
-    /// Path to the audio file to transcribe (optional when using --live, --serve, or --test-audio)
-    #[clap(required_unless_present_any = ["live", "test_audio", "serve"])]
+    /// Path to the audio file to transcribe (optional when using --live, --serve, --test-audio, or --apple)
+    #[clap(required_unless_present_any = ["live", "test_audio", "serve", "apple"])]
     audio: Option<String>,
 
     /// Capture macOS system audio in real time and stream subtitles to the terminal
     #[clap(long, default_value = "false")]
     live: bool,
+
+    /// Use native Apple Speech recognition on Apple Neural Engine (macOS only, ultra-low latency streaming)
+    #[clap(long, default_value = "false")]
+    apple: bool,
 
     /// Wait for the speaker to finish their sentence before sending (uses Apple Neural Engine SoundAnalysis + vocal-band detection to ignore SFX/music)
     #[clap(long, default_value = "false")]
@@ -222,8 +226,12 @@ async fn main() -> Result<()> {
         return run_server_foreground(&cfg);
     }
 
+    let is_apple = args.apple;
+    let is_live = args.live || args.apple;
+
     // If --preset was passed (e.g. with --live or file transcription), ensure whisper-server is running
-    let _managed_server = if let Some(preset) = args.preset {
+    let _managed_server = if !is_apple && args.preset.is_some() {
+        let preset = args.preset.unwrap();
         let cfg = ServerConfig {
             preset,
             model: args.model.clone(),
@@ -237,19 +245,36 @@ async fn main() -> Result<()> {
         None
     };
 
-    let transcriber = create_transcriber(&args)?;
+    let transcriber: Box<dyn Transcriber> = if is_apple {
+        Box::new(CustomApiProvider::new(
+            "http://localhost:8080".to_string(),
+            None,
+            None,
+            args.lang.clone(),
+        ))
+    } else {
+        create_transcriber(&args)?
+    };
 
-    if args.live {
+    if is_live {
         let chunk_secs = args.chunk_secs.unwrap_or_else(|| {
             args.preset
                 .map_or(4.0, ServerPreset::recommended_chunk_secs)
         });
-        let model_label = resolve_model_path(args.model.as_deref())
-            .ok()
-            .and_then(|p| p.file_name().map(|f| f.to_string_lossy().to_string()))
-            .or_else(|| args.model.clone());
+        let model_label = if is_apple {
+            Some("Apple Neural Engine".to_string())
+        } else {
+            resolve_model_path(args.model.as_deref())
+                .ok()
+                .and_then(|p| p.file_name().map(|f| f.to_string_lossy().to_string()))
+                .or_else(|| args.model.clone())
+        };
         let config = LiveConfig {
-            provider_label: provider_label(&args),
+            provider_label: if is_apple {
+                "Apple Speech (Native ANE Streaming)".to_string()
+            } else {
+                provider_label(&args)
+            },
             model: model_label,
             preset: args.preset,
             lang: args.lang.clone(),
@@ -259,6 +284,7 @@ async fn main() -> Result<()> {
             chunk_secs,
             speech_mode: args.speech,
             sub_port: args.sub_port,
+            apple: is_apple,
         };
         let transcript = run_live_subtitles(Arc::new(transcriber), config).await?;
 

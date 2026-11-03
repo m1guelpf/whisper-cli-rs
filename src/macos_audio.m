@@ -5,6 +5,7 @@
 #import <CoreMedia/CoreMedia.h>
 #import <CoreAudio/CoreAudioTypes.h>
 #import <CoreGraphics/CoreGraphics.h>
+#import <Speech/Speech.h>
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>

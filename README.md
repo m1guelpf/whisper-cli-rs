@@ -43,14 +43,16 @@ Generates transcriptions in `.txt`, `.vtt`, and `.srt` formats automatically.
 
 ## Features
 
-- **Native macOS Live Subtitles (`--live`)**: Tap directly into macOS system audio via Apple's `ScreenCaptureKit` (no BlackHole or virtual audio drivers required) for real-time terminal subtitles from Crunchyroll, YouTube, Netflix, or any app.
-- **Ultra-Fast Cloud & Local Transcription**: Uses Groq (`whisper-large-v3-turbo`), OpenAI (`whisper-1`), Deepgram (`nova-3`), or local GPU-accelerated endpoints.
-- **Universal Audio & Video Support**: Automatic `ffmpeg` pre-decoding for `.mp3`, `.mp4`, `.m4a`, `.wav`, `.mkv`, `.mov`, `.flac`, `.ogg`, and `.webm`.
-- **Multi-Provider Architecture**: Switch easily between Groq, OpenAI, Deepgram, or local/self-hosted servers.
-- **Multiple Output Formats**: Automatically writes `.txt`, `.vtt`, and `.srt` subtitle files in the same directory as the input file.
-- **Terminal Output Mode**: Use `-s` / `--stdout` to output transcript text directly to standard output without saving files.
-- **Word-level Timestamps**: Generate karaoke-style word timestamps with `--karaoke`.
-- **Language Selection & Translation**: Explicit language specification (`-l es`, `-l en`, `-l ja`) and direct translation to English (`-t / --translate`).
+- ⚡ **Native Apple Neural Engine Streaming (`--apple`)**: Zero-lag (<50ms) real-time streaming speech recognition powered by macOS's native `SpeechAnalyzer` and `SpeechTranscriber`. Words stream out frame-by-frame as they are spoken with zero model download and no server required.
+- 🎧 **Native macOS Live Subtitles (`--live`)**: Tap directly into macOS system audio via Apple's `ScreenCaptureKit` (no BlackHole or virtual audio drivers required) for real-time terminal subtitles from Crunchyroll, YouTube, Netflix, or any app.
+- 🌐 **Browser Extension Live Injection (`:8989/events`)**: Streams live subtitles with zero latency to the [whisper-cli-sub-injector](https://github.com/aramrw/whisper-cli-sub-injector) extension, supporting smart `Left Arrow` (`←`) replay navigation and sentence retiming.
+- ⚡ **Ultra-Fast Cloud & Local Transcription**: Uses Groq (`whisper-large-v3-turbo`), OpenAI (`whisper-1`), Deepgram (`nova-3`), or local GPU-accelerated endpoints (`whisper.cpp`).
+- 🎬 **Universal Audio & Video Support**: Automatic `ffmpeg` pre-decoding for `.mp3`, `.mp4`, `.m4a`, `.wav`, `.mkv`, `.mov`, `.flac`, `.ogg`, and `.webm`.
+- 🌐 **Multi-Provider Architecture**: Switch easily between Groq, OpenAI, Deepgram, or local/self-hosted servers.
+- 📝 **Multiple Output Formats**: Automatically writes `.txt`, `.vtt`, and `.srt` subtitle files in the same directory as the input file.
+- 📺 **Terminal Output Mode**: Use `-s` / `--stdout` to output transcript text directly to standard output without saving files.
+- ⏱️ **Word-level Timestamps**: Generate karaoke-style word timestamps with `--karaoke`.
+- 🌍 **Language Selection & Translation**: Explicit language specification (`-l es`, `-l en`, `-l ja`) and direct translation to English (`-t / --translate`).
 
 ---
 
@@ -135,6 +137,28 @@ whisper -p custom -u http://localhost:8080 audio.mp3
 
 ```bash
 whisper -p custom -u http://localhost:8080 -l es -s audio.mp3
+```
+
+---
+
+## ⚡ Apple Neural Engine Zero-Lag Streaming (`--apple`)
+
+Run true zero-lag, frame-by-frame streaming speech recognition directly on the **Apple Neural Engine (ANE)** using macOS's native `SpeechAnalyzer` + `SpeechTranscriber`:
+
+- **Sub-50ms Latency**: Words stream onto your screen as each syllable is spoken (no chunking, no sliding windows).
+- **100% Local & Zero Model Downloads**: Uses built-in OS speech assets managed by `AssetInventory`.
+- **Direct Browser Overlay Broadcast**: Broadcasts live word cues to `http://127.0.0.1:8989/events` for the [whisper-cli-sub-injector](https://github.com/aramrw/whisper-cli-sub-injector) extension.
+- **Auto-Pause Finalization**: Commits sentences instantly when you stop/pause the video.
+
+```bash
+# Stream live Spanish subtitles (ultra-low latency)
+whisper --apple -l es
+
+# Stream live Japanese subtitles
+whisper --apple -l ja
+
+# Stream live English subtitles
+whisper --apple -l en
 ```
 
 ---

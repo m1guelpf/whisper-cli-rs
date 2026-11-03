@@ -41,6 +41,14 @@ extern "C" {
     fn whisper_macos_audio_last_status() -> i32;
     fn whisper_macos_audio_sample_rate() -> u32;
     fn whisper_macos_speech_permille() -> u32;
+    fn wisp_applespeech_available() -> bool;
+    fn wisp_applespeech_start(
+        locale: *const c_char,
+        ctx: *mut c_void,
+        callback: extern "C" fn(*mut c_void, *const c_char, bool),
+    ) -> *mut c_void;
+    fn wisp_applespeech_feed(handle: *mut c_void, samples: *const f32, count: usize, rate: f64);
+    fn wisp_applespeech_stop(handle: *mut c_void);
 }
 
 #[cfg(target_os = "macos")]
@@ -502,12 +510,13 @@ pub struct LiveConfig {
     pub chunk_secs: f32,
     pub speech_mode: bool,
     pub sub_port: u16,
+    pub apple: bool,
 }
 
 pub async fn start_sub_server(
     port: u16,
     sub_tx: tokio::sync::broadcast::Sender<String>,
-    history: Arc<tokio::sync::Mutex<VecDeque<serde_json::Value>>>,
+    history: Arc<std::sync::Mutex<VecDeque<serde_json::Value>>>,
 ) {
     let addr = format!("127.0.0.1:{port}");
     let listener = match tokio::net::TcpListener::bind(&addr).await {
@@ -567,7 +576,7 @@ Connection: close\r\n\
 
                 if first_line.contains("/history") {
                     let body = {
-                        let hist = history_client.lock().await;
+                        let hist = history_client.lock().unwrap();
                         serde_json::to_string(&*hist).unwrap_or_else(|_| "[]".to_string())
                     };
                     let resp = format!(
@@ -600,13 +609,14 @@ retry: 1000\r\n\
                     }
 
                     // Send recent history buffer on initial connect so new tabs have previous context
-                    {
-                        let hist = history_client.lock().await;
-                        for cue in hist.iter() {
-                            let sse_chunk = format!("data: {cue}\n\n");
-                            if socket.write_all(sse_chunk.as_bytes()).await.is_err() {
-                                return;
-                            }
+                    let initial_cues: Vec<serde_json::Value> = {
+                        let hist = history_client.lock().unwrap();
+                        hist.iter().cloned().collect()
+                    };
+                    for cue in initial_cues {
+                        let sse_chunk = format!("data: {cue}\n\n");
+                        if socket.write_all(sse_chunk.as_bytes()).await.is_err() {
+                            return;
                         }
                     }
 
@@ -869,15 +879,349 @@ pub async fn run_live_subtitles(
 }
 
 #[cfg(target_os = "macos")]
+pub async fn run_live_apple_speech(config: LiveConfig) -> Result<Transcript> {
+    let session_start = Instant::now();
+    let (sub_broadcast_tx, _) = tokio::sync::broadcast::channel::<String>(64);
+    let sub_history = Arc::new(std::sync::Mutex::new(VecDeque::<serde_json::Value>::with_capacity(32)));
+    if config.sub_port > 0 {
+        start_sub_server(config.sub_port, sub_broadcast_tx.clone(), Arc::clone(&sub_history)).await;
+    }
+
+    let lang_str = config.lang.as_deref().unwrap_or("en");
+
+    if !config.stdout_only {
+        eprintln!("╭──────────────────────────────────────────────────────────────╮");
+        eprintln!("│ ⚡ macOS Apple Speech Recognition (Neural Engine Streaming)  │");
+        eprintln!("╰──────────────────────────────────────────────────────────────╯");
+        eprintln!("  • Engine   : Apple Speech.framework (Zero-Lag Streaming)");
+        eprintln!("  • Audio    : ScreenCaptureKit (System Audio, No Mic/BlackHole)");
+        if config.sub_port > 0 {
+            eprintln!("  • Subtitles: http://127.0.0.1:{}/events (Browser Injector)", config.sub_port);
+        }
+        eprintln!("  • Language : {lang_str}");
+        eprintln!("  • Status   : Streaming live... (Press Ctrl+C to stop)\n");
+    }
+
+    enum SpeechEvent {
+        Partial {
+            preview: String,
+            cue_val: serde_json::Value,
+        },
+        Final {
+            text: String,
+            short_ts: String,
+            start_ms: i64,
+            duration_ms: u64,
+            cue_val: serde_json::Value,
+        },
+    }
+
+    struct AppleCbState {
+        event_tx: tokio::sync::mpsc::UnboundedSender<SpeechEvent>,
+        last_id: Arc<std::sync::Mutex<String>>,
+        start_instant: Instant,
+        last_phrase_instant: Arc<std::sync::Mutex<Instant>>,
+        all_utterances: Arc<std::sync::Mutex<Vec<Utternace>>>,
+    }
+
+    let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel::<SpeechEvent>();
+    let all_utterances = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let last_id = Arc::new(std::sync::Mutex::new(uuid::Uuid::new_v4().to_string()));
+    let last_phrase_instant = Arc::new(std::sync::Mutex::new(Instant::now()));
+
+    let cb_state = Arc::new(AppleCbState {
+        event_tx,
+        last_id: Arc::clone(&last_id),
+        start_instant: session_start,
+        last_phrase_instant: Arc::clone(&last_phrase_instant),
+        all_utterances: Arc::clone(&all_utterances),
+    });
+
+    extern "C" fn apple_speech_callback(
+        ctx: *mut c_void,
+        text_ptr: *const c_char,
+        is_final: bool,
+    ) {
+        if ctx.is_null() || text_ptr.is_null() { return; }
+        let c_str = unsafe { CStr::from_ptr(text_ptr) };
+        let Ok(text) = c_str.to_str() else { return };
+        let text = text.trim();
+        if text.is_empty() { return; }
+
+        let state = unsafe { &*(ctx as *const AppleCbState) };
+        let now_ms = state.start_instant.elapsed().as_millis() as i64;
+        let phrase_elapsed_ms = {
+            let mut last = state.last_phrase_instant.lock().unwrap();
+            let elapsed = last.elapsed().as_millis() as u64;
+            if is_final {
+                *last = Instant::now();
+            }
+            elapsed
+        };
+        let duration_ms = phrase_elapsed_ms.max(800);
+        let start_ms = now_ms.saturating_sub(duration_ms as i64).max(0);
+        let ts = format_timestamp(start_ms / 10, false, ".");
+        let short_ts = ts.split('.').next().unwrap_or(&ts).to_string();
+
+        let cue_id = {
+            let mut id_lock = state.last_id.lock().unwrap();
+            if is_final {
+                let id = id_lock.clone();
+                *id_lock = uuid::Uuid::new_v4().to_string();
+                id
+            } else {
+                id_lock.clone()
+            }
+        };
+
+        let cue = serde_json::json!({
+            "id": cue_id,
+            "text": text,
+            "timestamp": short_ts,
+            "receivedAt": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis(),
+            "durationMs": duration_ms,
+            "lagMs": 30,
+        });
+
+        if is_final {
+            let _ = state.event_tx.send(SpeechEvent::Final {
+                text: text.to_string(),
+                short_ts,
+                start_ms,
+                duration_ms,
+                cue_val: cue,
+            });
+        } else {
+            let _ = state.event_tx.send(SpeechEvent::Partial {
+                preview: format!("[{short_ts}] {text}"),
+                cue_val: cue,
+            });
+        }
+    }
+
+    if !unsafe { wisp_applespeech_available() } {
+        return Err(anyhow!("macOS 26+ SpeechAnalyzer is not supported on this macOS version."));
+    }
+
+    let lang_lower = lang_str.trim().to_ascii_lowercase();
+    let locale_str: &str = match lang_lower.as_str() {
+        "es" => "es-ES",
+        "ja" => "ja-JP",
+        "zh" | "cmn" => "zh-CN",
+        "fr" => "fr-FR",
+        "de" => "de-DE",
+        "it" => "it-IT",
+        "ko" => "ko-KR",
+        "pt" => "pt-BR",
+        "ru" => "ru-RU",
+        other if other.contains('-') => other,
+        _ => "en-US",
+    };
+    let c_locale = std::ffi::CString::new(locale_str)?;
+
+    let state_ptr = Arc::into_raw(cb_state) as *mut c_void;
+    let engine_ptr = unsafe {
+        wisp_applespeech_start(c_locale.as_ptr(), state_ptr, apple_speech_callback)
+    };
+
+    if engine_ptr.is_null() {
+        let _ = unsafe { Arc::from_raw(state_ptr as *const AppleCbState) };
+        return Err(anyhow!("Failed to initialize macOS 26 SpeechAnalyzer session"));
+    }
+
+    // Start ScreenCaptureKit system audio feed
+    let (_audio_stream, mut audio_rx) = MacOsAudioStream::start()?;
+
+    let mut hud_interval = tokio::time::interval(std::time::Duration::from_millis(60));
+    let mut tick: usize = 0;
+    let mut recent_peak: f32 = 0.0;
+    let mut current_rms: f32 = 0.0;
+    let mut audio_bytes: u64 = 0;
+    let mut current_preview: Option<String> = None;
+    let mut pending_final: Option<serde_json::Value> = None;
+    let mut last_audio_instant = Instant::now();
+    let silence_chunk = [0.0f32; 960]; // 60ms silence at 16kHz
+    let mut trailing_silence_fed = 0usize;
+
+    let ctrl_c = tokio::signal::ctrl_c();
+    tokio::pin!(ctrl_c);
+
+    loop {
+        tokio::select! {
+            _ = &mut ctrl_c => {
+                break;
+            }
+            Some(event) = event_rx.recv() => {
+                match event {
+                    SpeechEvent::Partial { preview, cue_val } => {
+                        current_preview = Some(preview);
+                        pending_final = Some(cue_val.clone());
+                        // Immediately broadcast real-time streaming words to browser extension overlay!
+                        let _ = sub_broadcast_tx.send(cue_val.to_string());
+                    }
+                    SpeechEvent::Final { text, short_ts, start_ms, duration_ms, cue_val } => {
+                        current_preview = None;
+                        pending_final = None;
+
+                        // 1. Update subtitle history
+                        {
+                            let mut hist = sub_history.lock().unwrap();
+                            if hist.len() >= 25 {
+                                hist.pop_front();
+                            }
+                            hist.push_back(cue_val.clone());
+                        }
+
+                        // 2. Broadcast to browser overlay
+                        let _ = sub_broadcast_tx.send(cue_val.to_string());
+
+                        // 3. Store utterance
+                        all_utterances.lock().unwrap().push(Utternace {
+                            start: start_ms / 10,
+                            stop: (start_ms + duration_ms as i64) / 10,
+                            text: text.clone(),
+                        });
+
+                        // 4. Print clean final subtitle on its own line
+                        if config.stdout_only {
+                            println!("{text}");
+                            let _ = std::io::stdout().flush();
+                        } else {
+                            eprintln!("\r\x1b[2K\x1b[36m⚡ [{short_ts}]\x1b[0m \x1b[1m{text}\x1b[0m");
+                            let _ = std::io::stderr().flush();
+                        }
+                    }
+                }
+            }
+            _ = hud_interval.tick() => {
+                tick = tick.wrapping_add(1);
+                recent_peak *= 0.92;
+
+                // When audio pauses, feed brief trailing silence to help Apple's model finalize
+                if last_audio_instant.elapsed() > Duration::from_millis(80) && trailing_silence_fed < 6 {
+                    trailing_silence_fed += 1;
+                    unsafe {
+                        wisp_applespeech_feed(engine_ptr, silence_chunk.as_ptr(), silence_chunk.len(), 16000.0);
+                    }
+                }
+
+                // If playback paused/stopped and we have unfinalized streaming speech:
+                if last_audio_instant.elapsed() > Duration::from_millis(600) {
+                    if let Some(cue_val) = pending_final.take() {
+                        let cue_text = cue_val.get("text").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                        let short_ts = cue_val.get("timestamp").and_then(|v| v.as_str()).unwrap_or("00:00").to_string();
+                        let dur = cue_val.get("durationMs").and_then(|v| v.as_u64()).unwrap_or(1000);
+
+                        {
+                            let mut hist = sub_history.lock().unwrap();
+                            if hist.len() >= 25 {
+                                hist.pop_front();
+                            }
+                            hist.push_back(cue_val.clone());
+                        }
+                        all_utterances.lock().unwrap().push(Utternace {
+                            start: 0,
+                            stop: dur as i64 / 10,
+                            text: cue_text.clone(),
+                        });
+
+                        if config.stdout_only {
+                            println!("{cue_text}");
+                            let _ = std::io::stdout().flush();
+                        } else {
+                            eprintln!("\r\x1b[2K\x1b[36m⚡ [{short_ts}]\x1b[0m \x1b[1m{cue_text}\x1b[0m");
+                            let _ = std::io::stderr().flush();
+                        }
+
+                        // Next speech will get a new ID
+                        *last_id.lock().unwrap() = uuid::Uuid::new_v4().to_string();
+                        current_preview = None;
+                    }
+                }
+
+                if !config.stdout_only {
+                    let spinner = SPINNER_FRAMES[tick % SPINNER_FRAMES.len()];
+                    let normalized = (current_rms / 0.12).clamp(0.0, 1.0).sqrt();
+                    let filled = (normalized * 6.0).round() as usize;
+                    let empty = 6_usize.saturating_sub(filled);
+                    let bar = format!("{}{}", "█".repeat(filled), "░".repeat(empty));
+                    let bytes_str = format_bytes(audio_bytes);
+
+                    let status = if let Some(ref text) = current_preview {
+                        let max_len = 35;
+                        let count = text.chars().count();
+                        let truncated = if count > max_len {
+                            let tail: String = text.chars().skip(count - max_len).collect();
+                            format!("...{tail}")
+                        } else {
+                            text.clone()
+                        };
+                        format!("\x1b[32m🗣️ {truncated}\x1b[0m")
+                    } else if audio_bytes == 0 {
+                        "\x1b[2m⚪ Waiting for audio...\x1b[0m".to_string()
+                    } else if recent_peak >= 0.015 {
+                        "\x1b[36m⚡ Listening\x1b[0m".to_string()
+                    } else {
+                        "\x1b[2m🎙️ Silence\x1b[0m".to_string()
+                    };
+
+                    let hud = format!("{spinner} [{bar}] │ 📥 {bytes_str} │ Peak: {recent_peak:.2} │ {status}");
+                    eprint!("\r\x1b[2K{hud}");
+                    let _ = std::io::stderr().flush();
+                }
+            }
+            maybe_samples = audio_rx.recv() => {
+                let Some(samples) = maybe_samples else {
+                    break;
+                };
+
+                let rms = compute_rms(&samples);
+                let peak = compute_peak(&samples);
+                current_rms = rms;
+                recent_peak = recent_peak.max(peak);
+                audio_bytes += (samples.len() * 4) as u64;
+                last_audio_instant = Instant::now();
+                trailing_silence_fed = 0;
+
+                unsafe {
+                    wisp_applespeech_feed(engine_ptr, samples.as_ptr(), samples.len(), 16000.0);
+                }
+            }
+        }
+    }
+
+    if !config.stdout_only {
+        eprintln!("\n👋 Stopping Apple Speech live capture...");
+    }
+
+    unsafe {
+        wisp_applespeech_stop(engine_ptr);
+    }
+
+    let final_cb_state = unsafe { Arc::from_raw(state_ptr as *const AppleCbState) };
+    let utts = final_cb_state.all_utterances.lock().unwrap().clone();
+
+    Ok(Transcript {
+        processing_time: session_start.elapsed(),
+        utterances: utts,
+        word_utterances: None,
+    })
+}
+
+#[cfg(target_os = "macos")]
 pub async fn run_live_subtitles(
     transcriber: Arc<Box<dyn Transcriber>>,
     config: LiveConfig,
 ) -> Result<Transcript> {
+    if config.apple {
+        return run_live_apple_speech(config).await;
+    }
+
     let (_stream, mut audio_rx) = MacOsAudioStream::start()?;
     let session_start = Instant::now();
 
     let (sub_broadcast_tx, _) = tokio::sync::broadcast::channel::<String>(64);
-    let sub_history = Arc::new(tokio::sync::Mutex::new(VecDeque::<serde_json::Value>::with_capacity(32)));
+    let sub_history = Arc::new(std::sync::Mutex::new(VecDeque::<serde_json::Value>::with_capacity(32)));
     if config.sub_port > 0 {
         start_sub_server(config.sub_port, sub_broadcast_tx.clone(), Arc::clone(&sub_history)).await;
     }
@@ -940,6 +1284,7 @@ pub async fn run_live_subtitles(
     let transcriber_worker = Arc::clone(&transcriber);
     let sub_broadcast_worker = sub_broadcast_tx.clone();
     let sub_history_worker = Arc::clone(&sub_history);
+    let session_start_worker = session_start;
 
     let worker_handle = tokio::spawn(async move {
         let mut all_utterances: Vec<Utternace> = Vec::new();
@@ -980,14 +1325,20 @@ pub async fn run_live_subtitles(
                             }
                             let ts = format_timestamp(seg.start_offset_ms / 10, false, ".");
                             let short_ts = ts.split('.').next().unwrap_or(&ts);
+                            let now_ms = session_start_worker.elapsed().as_millis() as i64;
+                            let audio_duration_ms = (seg.samples.len() * 1000 / SAMPLE_RATE) as u64;
+                            let duration_ms = audio_duration_ms.max((seg.end_offset_ms - seg.start_offset_ms).max(0) as u64);
+                            let lag_ms = (now_ms - seg.end_offset_ms).max(0) as u64;
                             let cue = serde_json::json!({
                                 "id": uuid::Uuid::new_v4().to_string(),
                                 "text": &subtitle,
                                 "timestamp": short_ts,
                                 "receivedAt": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis(),
+                                "durationMs": duration_ms,
+                                "lagMs": lag_ms,
                             });
                             {
-                                let mut hist = sub_history_worker.lock().await;
+                                let mut hist = sub_history_worker.lock().unwrap();
                                 if hist.len() >= 25 {
                                     hist.pop_front();
                                 }
