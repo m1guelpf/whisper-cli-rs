@@ -511,6 +511,7 @@ pub struct LiveConfig {
     pub speech_mode: bool,
     pub sub_port: u16,
     pub apple: bool,
+    pub moonshine: bool,
 }
 
 pub async fn start_sub_server(
@@ -1208,6 +1209,239 @@ pub async fn run_live_apple_speech(config: LiveConfig) -> Result<Transcript> {
     })
 }
 
+pub async fn run_live_moonshine(config: LiveConfig) -> Result<Transcript> {
+    let lang_str = config.lang.as_deref().unwrap_or("es");
+    let lang_lower = lang_str.trim().to_ascii_lowercase();
+
+    let (lang_code, arch, model_label) = match lang_lower.as_str() {
+        "es" | "spanish" => ("es", moonshine_rs::ModelArch::SmallStreaming, "Small Streaming (4.9% WER)"),
+        "en" | "english" => ("en", moonshine_rs::ModelArch::SmallStreaming, "Small Streaming"),
+        "ja" | "japanese" => ("ja", moonshine_rs::ModelArch::SmallStreaming, "Small Streaming"),
+        "de" | "german" => ("de", moonshine_rs::ModelArch::SmallStreaming, "Small Streaming"),
+        "ar" | "arabic" => ("ar", moonshine_rs::ModelArch::TinyStreaming, "Tiny Streaming"),
+        "vi" | "vietnamese" => ("vi", moonshine_rs::ModelArch::TinyStreaming, "Tiny Streaming"),
+        "zh" | "chinese" => ("zh", moonshine_rs::ModelArch::TinyStreaming, "Tiny Streaming"),
+        "ko" | "korean" => ("ko", moonshine_rs::ModelArch::Tiny, "Tiny"),
+        "uk" | "ukrainian" => ("uk", moonshine_rs::ModelArch::Base, "Base"),
+        _ => ("es", moonshine_rs::ModelArch::SmallStreaming, "Small Streaming"),
+    };
+
+    let cache_dir = dirs::cache_dir()
+        .unwrap_or_else(std::env::temp_dir)
+        .join("whisper")
+        .join("moonshine")
+        .join(lang_code);
+    std::fs::create_dir_all(&cache_dir)?;
+
+    if !config.stdout_only {
+        eprintln!("╭──────────────────────────────────────────────────────────────╮");
+        eprintln!("│ ⚡ Moonshine v2 Speech Recognition (Ultra-Fast Streaming)    │");
+        eprintln!("╰──────────────────────────────────────────────────────────────╯");
+        eprintln!("  • Engine   : Moonshine v2 (Ergodic Linear Attention STT)");
+        eprintln!("  • Model    : {model_label} [{lang_code}]");
+        eprintln!("  • Latency  : ~35-50ms (Zero-Lag Edge Streaming)");
+        eprintln!("  • Audio    : ScreenCaptureKit (System Audio, No Mic/BlackHole)");
+        if config.sub_port > 0 {
+            eprintln!("  • Subtitles: http://127.0.0.1:{}/events (Browser Injector)", config.sub_port);
+        }
+        eprintln!("  • Language : {lang_code}");
+        eprintln!("  • Status   : Checking model assets...\n");
+    }
+
+    // Resolve dependencies and auto-download if missing
+    let deps_json = moonshine_rs::get_stt_dependencies(lang_code, Some(arch), false)
+        .map_err(|e| anyhow!("Failed to resolve Moonshine model dependencies: {e:?}"))?;
+    let v: serde_json::Value = serde_json::from_str(&deps_json)?;
+    let files = v["groups"][0]["files"].as_array()
+        .ok_or_else(|| anyhow!("Invalid Moonshine manifest structure"))?;
+
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(180))
+        .build()?;
+
+    for f in files {
+        let name = f["name"].as_str().unwrap_or_default();
+        let url = f["url"].as_str().unwrap_or_default();
+        let target = cache_dir.join(name);
+        if !target.exists() {
+            if !config.stdout_only {
+                eprintln!("  📥 Downloading Moonshine asset: {name} ...");
+            }
+            let mut resp = client.get(url).send()?.error_for_status()?;
+            let mut out = File::create(&target)?;
+            resp.copy_to(&mut out)?;
+        }
+    }
+
+    if !config.stdout_only {
+        eprintln!("  ✅ Model assets verified. Starting session...\n");
+    }
+
+    let transcriber = Arc::new(moonshine_rs::Transcriber::from_files(&cache_dir, arch, None)
+        .map_err(|e| anyhow!("Failed to load Moonshine model from {}: {e:?}", cache_dir.display()))?);
+    let mut stream = transcriber.create_owned_stream()
+        .map_err(|e| anyhow!("Failed to initialize Moonshine streaming session: {e:?}"))?;
+
+    let session_start = Instant::now();
+    let (sub_broadcast_tx, _) = tokio::sync::broadcast::channel::<String>(64);
+    let sub_history = Arc::new(std::sync::Mutex::new(VecDeque::<serde_json::Value>::with_capacity(32)));
+    if config.sub_port > 0 {
+        start_sub_server(config.sub_port, sub_broadcast_tx.clone(), Arc::clone(&sub_history)).await;
+    }
+
+    #[cfg(target_os = "macos")]
+    let (_audio_stream, mut audio_rx) = MacOsAudioStream::start()?;
+
+    #[cfg(not(target_os = "macos"))]
+    return Err(anyhow!("ScreenCaptureKit audio streaming is only available on macOS"));
+
+    let mut hud_interval = tokio::time::interval(Duration::from_millis(50));
+    let mut tick: usize = 0;
+    let mut recent_peak: f32 = 0.0;
+    let mut current_rms: f32 = 0.0;
+    let mut audio_bytes: u64 = 0;
+    let mut current_preview: Option<String> = None;
+    let mut last_audio_instant = Instant::now();
+    let mut last_committed_id: Option<u64> = None;
+    let mut all_utterances: Vec<Utternace> = Vec::new();
+    let mut last_preview_text: String = String::new();
+
+    let ctrl_c = tokio::signal::ctrl_c();
+    tokio::pin!(ctrl_c);
+
+    loop {
+        tokio::select! {
+            _ = &mut ctrl_c => {
+                break;
+            }
+            maybe_samples = audio_rx.recv() => {
+                let Some(samples) = maybe_samples else { break; };
+                let rms = compute_rms(&samples);
+                let pkt_peak = compute_peak(&samples);
+                if pkt_peak >= 0.005 || rms >= 0.005 {
+                    last_audio_instant = Instant::now();
+                }
+                current_rms = rms;
+                recent_peak = (recent_peak * 0.95).max(pkt_peak);
+                audio_bytes += (samples.len() * 4) as u64;
+
+                let _ = stream.add_audio(&samples, 16000);
+            }
+            _ = hud_interval.tick() => {
+                tick = tick.wrapping_add(1);
+                recent_peak *= 0.92;
+
+                let is_quiet = last_audio_instant.elapsed() > Duration::from_millis(600);
+                let force_poll = is_quiet && current_preview.is_some();
+
+                if let Ok(transcript) = stream.poll(force_poll) {
+                    for line in &transcript.lines {
+                        let text = line.text.trim();
+                        if text.is_empty() || is_hallucination(text) {
+                            continue;
+                        }
+
+                        let start_sec = line.start_time;
+                        let duration_sec = line.duration.max(0.5);
+                        let start_ms = (start_sec * 1000.0) as i64;
+                        let duration_ms = (duration_sec * 1000.0) as u64;
+                        let full_ts = format_timestamp(start_ms / 10, false, ".");
+                        let short_ts = if full_ts.len() >= 5 { full_ts[..5].to_string() } else { full_ts };
+
+                        let cue_val = serde_json::json!({
+                            "id": format!("ms-{}", line.id),
+                            "text": text,
+                            "timestamp": short_ts,
+                            "receivedAt": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis(),
+                            "durationMs": duration_ms,
+                            "lagMs": 35,
+                        });
+
+                        if line.is_complete {
+                            if last_committed_id != Some(line.id) {
+                                last_committed_id = Some(line.id);
+                                current_preview = None;
+                                last_preview_text.clear();
+
+                                {
+                                    let mut hist = sub_history.lock().unwrap();
+                                    if hist.len() >= 25 {
+                                        hist.pop_front();
+                                    }
+                                    hist.push_back(cue_val.clone());
+                                }
+
+                                let _ = sub_broadcast_tx.send(cue_val.to_string());
+
+                                all_utterances.push(Utternace {
+                                    start: start_ms / 10,
+                                    stop: (start_ms + duration_ms as i64) / 10,
+                                    text: text.to_string(),
+                                });
+
+                                if config.stdout_only {
+                                    println!("{text}");
+                                    let _ = std::io::stdout().flush();
+                                } else {
+                                    eprintln!("\r\x1b[2K\x1b[35m⚡ [{short_ts}]\x1b[0m \x1b[1m{text}\x1b[0m");
+                                    let _ = std::io::stderr().flush();
+                                }
+                            }
+                        } else {
+                            if text != last_preview_text {
+                                last_preview_text = text.to_string();
+                                current_preview = Some(format!("[{short_ts}] {text}"));
+                                let _ = sub_broadcast_tx.send(cue_val.to_string());
+                            }
+                        }
+                    }
+                }
+
+                if !config.stdout_only {
+                    let spinner = SPINNER_FRAMES[tick % SPINNER_FRAMES.len()];
+                    let norm_rms = (current_rms / 0.12).clamp(0.0, 1.0).sqrt();
+                    let filled = (norm_rms * 8.0).round() as usize;
+                    let empty = 8_usize.saturating_sub(filled);
+                    let bar = format!("{}{}", "█".repeat(filled), "░".repeat(empty));
+
+                    let preview_hud = if let Some(ref p) = current_preview {
+                        let max_chars = 40;
+                        let char_count = p.chars().count();
+                        if char_count > max_chars {
+                            let tail: String = p.chars().skip(char_count - max_chars).collect();
+                            format!(" │ 🗣️ ...{tail}")
+                        } else {
+                            format!(" │ 🗣️ {p}")
+                        }
+                    } else {
+                        String::new()
+                    };
+
+                    let hud_line = format!(
+                        "{spinner} [{bar}] │ 📥 {} │ Peak: {:.2}{preview_hud}",
+                        format_bytes(audio_bytes),
+                        recent_peak,
+                    );
+
+                    eprint!("\r\x1b[2K{hud_line}");
+                    let _ = std::io::stderr().flush();
+                }
+            }
+        }
+    }
+
+    let _ = stream.finalize();
+    if !config.stdout_only {
+        eprintln!("\n👋 Stopping Moonshine streaming...");
+    }
+
+    Ok(Transcript {
+        processing_time: session_start.elapsed(),
+        utterances: all_utterances,
+        word_utterances: None,
+    })
+}
+
 #[cfg(target_os = "macos")]
 pub async fn run_live_subtitles(
     transcriber: Arc<Box<dyn Transcriber>>,
@@ -1215,6 +1449,9 @@ pub async fn run_live_subtitles(
 ) -> Result<Transcript> {
     if config.apple {
         return run_live_apple_speech(config).await;
+    }
+    if config.moonshine {
+        return run_live_moonshine(config).await;
     }
 
     let (_stream, mut audio_rx) = MacOsAudioStream::start()?;

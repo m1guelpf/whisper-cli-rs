@@ -45,8 +45,8 @@ struct Args {
     #[clap(short = 'l', long)]
     lang: Option<String>,
 
-    /// Path to the audio file to transcribe (optional when using --live, --serve, --test-audio, or --apple)
-    #[clap(required_unless_present_any = ["live", "test_audio", "serve", "apple"])]
+    /// Path to the audio file to transcribe (optional when using --live, --serve, --test-audio, --apple, or --moonshine)
+    #[clap(required_unless_present_any = ["live", "test_audio", "serve", "apple", "moonshine"])]
     audio: Option<String>,
 
     /// Capture macOS system audio in real time and stream subtitles to the terminal
@@ -56,6 +56,10 @@ struct Args {
     /// Use native Apple Speech recognition on Apple Neural Engine (macOS only, ultra-low latency streaming)
     #[clap(long, default_value = "false")]
     apple: bool,
+
+    /// Use ultra-fast Moonshine streaming speech recognition (<50ms latency, high accuracy)
+    #[clap(long, default_value = "false")]
+    moonshine: bool,
 
     /// Wait for the speaker to finish their sentence before sending (uses Apple Neural Engine SoundAnalysis + vocal-band detection to ignore SFX/music)
     #[clap(long, default_value = "false")]
@@ -227,10 +231,11 @@ async fn main() -> Result<()> {
     }
 
     let is_apple = args.apple;
-    let is_live = args.live || args.apple;
+    let is_moonshine = args.moonshine;
+    let is_live = args.live || args.apple || args.moonshine;
 
     // If --preset was passed (e.g. with --live or file transcription), ensure whisper-server is running
-    let _managed_server = if !is_apple && args.preset.is_some() {
+    let _managed_server = if !is_apple && !is_moonshine && args.preset.is_some() {
         let preset = args.preset.unwrap();
         let cfg = ServerConfig {
             preset,
@@ -245,7 +250,7 @@ async fn main() -> Result<()> {
         None
     };
 
-    let transcriber: Box<dyn Transcriber> = if is_apple {
+    let transcriber: Box<dyn Transcriber> = if is_apple || is_moonshine {
         Box::new(CustomApiProvider::new(
             "http://localhost:8080".to_string(),
             None,
@@ -263,6 +268,8 @@ async fn main() -> Result<()> {
         });
         let model_label = if is_apple {
             Some("Apple Neural Engine".to_string())
+        } else if is_moonshine {
+            Some("Moonshine v2 Streaming".to_string())
         } else {
             resolve_model_path(args.model.as_deref())
                 .ok()
@@ -272,6 +279,8 @@ async fn main() -> Result<()> {
         let config = LiveConfig {
             provider_label: if is_apple {
                 "Apple Speech (Native ANE Streaming)".to_string()
+            } else if is_moonshine {
+                "Moonshine v2 (Ergodic Linear Attention)".to_string()
             } else {
                 provider_label(&args)
             },
@@ -285,6 +294,7 @@ async fn main() -> Result<()> {
             speech_mode: args.speech,
             sub_port: args.sub_port,
             apple: is_apple,
+            moonshine: is_moonshine,
         };
         let transcript = run_live_subtitles(Arc::new(transcriber), config).await?;
 

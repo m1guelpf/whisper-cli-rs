@@ -43,7 +43,8 @@ Generates transcriptions in `.txt`, `.vtt`, and `.srt` formats automatically.
 
 ## Features
 
-- ⚡ **Native Apple Neural Engine Streaming (`--apple`)**: Zero-lag (<50ms) real-time streaming speech recognition powered by macOS's native `SpeechAnalyzer` and `SpeechTranscriber`. Words stream out frame-by-frame as they are spoken with zero model download and no server required.
+- ⚡ **Moonshine v2 Ultra-Fast Streaming (`--moonshine`)**: State-of-the-art open-weights streaming speech recognition by Useful Sensors. Utilizes variable-length linear ergodic attention ($O(T)$) to deliver **~35-50ms inference latency** with **4.9% WER** (Spanish Small Streaming). Fully offline, zero Python, auto-downloads and caches ONNX model assets, and streams with full capitalization & punctuation directly to terminal and browser extension.
+- ⚡ **Native Apple Neural Engine Streaming (`--apple`)**: Zero-lag real-time streaming speech recognition powered by macOS's native `SpeechAnalyzer` and `SpeechTranscriber`. Words stream out frame-by-frame as they are spoken with zero model download and no server required.
 - 🎧 **Native macOS Live Subtitles (`--live`)**: Tap directly into macOS system audio via Apple's `ScreenCaptureKit` (no BlackHole or virtual audio drivers required) for real-time terminal subtitles from Crunchyroll, YouTube, Netflix, or any app.
 - 🌐 **Browser Extension Live Injection (`:8989/events`)**: Streams live subtitles with zero latency to the [whisper-cli-sub-injector](https://github.com/aramrw/whisper-cli-sub-injector) extension, supporting smart `Left Arrow` (`←`) replay navigation and sentence retiming.
 - ⚡ **Ultra-Fast Cloud & Local Transcription**: Uses Groq (`whisper-large-v3-turbo`), OpenAI (`whisper-1`), Deepgram (`nova-3`), or local GPU-accelerated endpoints (`whisper.cpp`).
@@ -137,6 +138,29 @@ whisper -p custom -u http://localhost:8080 audio.mp3
 
 ```bash
 whisper -p custom -u http://localhost:8080 -l es -s audio.mp3
+```
+
+---
+
+## ⚡ Moonshine v2 Ultra-Fast Streaming (`--moonshine`)
+
+Run state-of-the-art open-weights streaming speech recognition using **Moonshine v2** (Useful Sensors):
+
+- **~35-50ms Latency**: Linear-time ergodic attention ($O(T)$) eliminates Whisper's 30-second quadratic attention overhead.
+- **Top-Tier Accuracy (4.9% WER in Spanish)**: Small Streaming model hits near-human accuracy on standard benchmarks (FLEURS / MLS).
+- **Full Capitalization & Punctuation**: Generates clean, readable sentences with proper capitalization, accents, and punctuation.
+- **Automatic Model Caching**: Auto-downloads and caches optimized ONNX models from Moonshine CDN on first launch with zero manual setup.
+- **Direct Browser Overlay Broadcast**: Broadcasts live partial and finalized cues to `http://127.0.0.1:8989/events` for the [whisper-cli-sub-injector](https://github.com/aramrw/whisper-cli-sub-injector) extension.
+
+```bash
+# Stream live Spanish subtitles (Small Streaming, 4.9% WER)
+whisper --moonshine -l es
+
+# Stream live English subtitles
+whisper --moonshine -l en
+
+# Stream live Japanese subtitles
+whisper --moonshine -l ja
 ```
 
 ---

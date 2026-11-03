@@ -30,5 +30,6 @@ tokio-util = { version = "0.7", features = ["codec"] }
 clap = { version = "4.4.3", features = ["derive"] }
 serde = { version = "1.0.188", features = ["derive"] }
 serde_json = "1.0"
+moonshine-rs = { version = "0.2.6", default-features = false }
 reqwest = { version = "0.11.20", features = ["blocking", "stream", "multipart", "json"] }
 audrey = { version = "0.3.0", default-features = false, features = ["wav"] }
