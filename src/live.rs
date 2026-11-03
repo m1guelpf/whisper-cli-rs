@@ -493,6 +493,7 @@ fn render_live_hud(
 pub struct LiveConfig {
     pub provider_label: String,
     pub model: Option<String>,
+    pub preset: Option<crate::server::ServerPreset>,
     pub lang: Option<String>,
     pub translate: bool,
     pub karaoke: bool,
@@ -730,8 +731,12 @@ pub async fn run_live_subtitles(
         start_sub_server(config.sub_port, sub_broadcast_tx.clone()).await;
     }
 
-    // In --speech mode, allow long sentences up to 15.0s unless the user set an even larger --chunk-secs
-    let effective_max_secs = if config.speech_mode {
+    let is_realtime = config.preset == Some(crate::server::ServerPreset::Realtime);
+
+    // In realtime preset, enforce tight 1.2s-2.5s chunks; in --speech mode allow up to 15s sentences
+    let effective_max_secs = if is_realtime {
+        config.chunk_secs.clamp(1.2, 2.5)
+    } else if config.speech_mode {
         config.chunk_secs.max(15.0)
     } else {
         config.chunk_secs.clamp(1.5, 15.0)
@@ -744,7 +749,9 @@ pub async fn run_live_subtitles(
         } else {
             lang_str.to_string()
         };
-        let window_desc = if config.speech_mode {
+        let window_desc = if is_realtime {
+            format!("Near-Real-Time Streaming ({effective_max_secs:.1}s rolling chunks, 0.18s micro-pauses)")
+        } else if config.speech_mode {
             format!("Smart Speech VAD (waits for sentence end up to {effective_max_secs:.0}s, filters SFX/music)")
         } else {
             format!("{:.1}s adaptive VAD chunks", effective_max_secs)
@@ -768,19 +775,50 @@ pub async fn run_live_subtitles(
     let is_transcribing_ui = Arc::clone(&is_transcribing);
 
     let max_chunk_samples = (effective_max_secs * SAMPLE_RATE as f32) as usize;
-    let soft_long_sentence_samples = (7.5 * SAMPLE_RATE as f32) as usize;
-    let min_pause_split_samples = (1.10 * SAMPLE_RATE as f32) as usize;
-    let short_phrase_min_samples = (0.32 * SAMPLE_RATE as f32) as usize;
-    let pause_silence_samples = if config.speech_mode {
+    let soft_long_sentence_samples = if is_realtime {
+        (1.5 * SAMPLE_RATE as f32) as usize
+    } else {
+        (7.5 * SAMPLE_RATE as f32) as usize
+    };
+    let min_pause_split_samples = if is_realtime {
+        (0.55 * SAMPLE_RATE as f32) as usize
+    } else {
+        (1.10 * SAMPLE_RATE as f32) as usize
+    };
+    let short_phrase_min_samples = if is_realtime {
+        (0.20 * SAMPLE_RATE as f32) as usize
+    } else {
+        (0.32 * SAMPLE_RATE as f32) as usize
+    };
+    let pause_silence_samples = if is_realtime {
+        // Fast 0.18s micro-pause split for rapid dialogue
+        (0.18 * SAMPLE_RATE as f32) as usize
+    } else if config.speech_mode {
         // Wait ~0.46s of non-speech so natural mid-sentence word gaps aren't cut prematurely
         (0.46 * SAMPLE_RATE as f32) as usize
     } else {
         (0.36 * SAMPLE_RATE as f32) as usize
     };
-    let breath_pause_samples = (0.24 * SAMPLE_RATE as f32) as usize;
-    let long_silence_samples = (0.68 * SAMPLE_RATE as f32) as usize;
-    let pre_roll_capacity = (0.35 * SAMPLE_RATE as f32) as usize;
-    let overlap_samples = (0.18 * SAMPLE_RATE as f32) as usize;
+    let breath_pause_samples = if is_realtime {
+        (0.14 * SAMPLE_RATE as f32) as usize
+    } else {
+        (0.24 * SAMPLE_RATE as f32) as usize
+    };
+    let long_silence_samples = if is_realtime {
+        (0.35 * SAMPLE_RATE as f32) as usize
+    } else {
+        (0.68 * SAMPLE_RATE as f32) as usize
+    };
+    let pre_roll_capacity = if is_realtime {
+        (0.20 * SAMPLE_RATE as f32) as usize
+    } else {
+        (0.35 * SAMPLE_RATE as f32) as usize
+    };
+    let overlap_samples = if is_realtime {
+        (0.10 * SAMPLE_RATE as f32) as usize
+    } else {
+        (0.18 * SAMPLE_RATE as f32) as usize
+    };
     let vad_threshold: f32 = 0.0045;
 
     let stdout_only = config.stdout_only;

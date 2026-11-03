@@ -18,6 +18,9 @@ pub enum ServerPreset {
     /// Ultra-low latency for rapid dialogue: tight 7.5s encoder window (-ac 384 -nf -bo 1 -bs 1)
     #[clap(name = "fast")]
     Fast,
+    /// Near-real-time streaming: ultra-low latency (~1.8s rolling window, 0.18s pause cuts, -ac 256)
+    #[clap(name = "realtime")]
+    Realtime,
     /// Maximum transcription quality: 5-way beam search (-bo 5 -bs 5) + full context
     #[clap(name = "accurate")]
     Accurate,
@@ -29,6 +32,7 @@ impl ServerPreset {
             Self::Balanced => "balanced",
             Self::Live => "live",
             Self::Fast => "fast",
+            Self::Realtime => "realtime",
             Self::Accurate => "accurate",
         }
     }
@@ -44,6 +48,9 @@ impl ServerPreset {
             Self::Fast => {
                 "Fast / Low-Latency (7.5s audio context, greedy single-pass: -ac 384 -nf -bo 1 -bs 1)"
             }
+            Self::Realtime => {
+                "Near-Real-Time Streaming (~1.8s chunks, 0.18s micro-pauses: -ac 256 -nf -bo 1 -bs 1)"
+            }
             Self::Accurate => {
                 "High Accuracy (Full 30s context + 5-beam search: -bo 5 -bs 5 -nth 0.55)"
             }
@@ -52,6 +59,7 @@ impl ServerPreset {
 
     pub fn recommended_chunk_secs(self) -> f32 {
         match self {
+            Self::Realtime => 1.8,
             Self::Fast => 2.8,
             Self::Live => 3.5,
             Self::Balanced | Self::Accurate => 4.0,
@@ -163,6 +171,19 @@ pub fn build_server_args(config: &ServerConfig) -> Result<(PathBuf, Vec<String>)
                 "0.45".to_string(),
                 "-ac".to_string(),
                 ac.to_string(),
+                "-nf".to_string(),
+                "-bo".to_string(),
+                "1".to_string(),
+                "-bs".to_string(),
+                "1".to_string(),
+            ]);
+        }
+        ServerPreset::Realtime => {
+            args.extend([
+                "-nth".to_string(),
+                "0.4".to_string(),
+                "-ac".to_string(),
+                "256".to_string(),
                 "-nf".to_string(),
                 "-bo".to_string(),
                 "1".to_string(),

@@ -251,6 +251,7 @@ async fn main() -> Result<()> {
         let config = LiveConfig {
             provider_label: provider_label(&args),
             model: model_label,
+            preset: args.preset,
             lang: args.lang.clone(),
             translate: args.translate,
             karaoke: args.karaoke,
