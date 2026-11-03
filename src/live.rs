@@ -498,6 +498,110 @@ pub struct LiveConfig {
     pub stdout_only: bool,
     pub chunk_secs: f32,
     pub speech_mode: bool,
+    pub sub_port: u16,
+}
+
+pub async fn start_sub_server(port: u16, sub_tx: tokio::sync::broadcast::Sender<String>) {
+    let addr = format!("127.0.0.1:{port}");
+    let listener = match tokio::net::TcpListener::bind(&addr).await {
+        Ok(l) => l,
+        Err(e) => {
+            eprintln!("\x1b[33m⚠️  Could not bind subtitle broadcast server to {addr}: {e}\x1b[0m");
+            return;
+        }
+    };
+
+    tokio::spawn(async move {
+        loop {
+            let (mut socket, _) = match listener.accept().await {
+                Ok(conn) => conn,
+                Err(_) => break,
+            };
+
+            let mut sub_rx = sub_tx.subscribe();
+            tokio::spawn(async move {
+                use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+                let mut buf = [0u8; 1024];
+                let n = match socket.read(&mut buf).await {
+                    Ok(n) if n > 0 => n,
+                    _ => return,
+                };
+                let req = String::from_utf8_lossy(&buf[..n]);
+                let first_line = req.lines().next().unwrap_or("");
+
+                if first_line.starts_with("OPTIONS") {
+                    let resp = "HTTP/1.1 204 No Content\r\n\
+Access-Control-Allow-Origin: *\r\n\
+Access-Control-Allow-Methods: GET, OPTIONS\r\n\
+Access-Control-Allow-Headers: *\r\n\
+Content-Length: 0\r\n\
+\r\n";
+                    let _ = socket.write_all(resp.as_bytes()).await;
+                    return;
+                }
+
+                if first_line.contains("/status") {
+                    let body = r#"{"status":"online"}"#;
+                    let resp = format!(
+                        "HTTP/1.1 200 OK\r\n\
+Access-Control-Allow-Origin: *\r\n\
+Content-Type: application/json\r\n\
+Content-Length: {}\r\n\
+Connection: close\r\n\
+\r\n{}",
+                        body.len(),
+                        body
+                    );
+                    let _ = socket.write_all(resp.as_bytes()).await;
+                    return;
+                }
+
+                if first_line.contains("/events") {
+                    let header = "HTTP/1.1 200 OK\r\n\
+Content-Type: text/event-stream\r\n\
+Cache-Control: no-cache\r\n\
+Connection: keep-alive\r\n\
+Access-Control-Allow-Origin: *\r\n\
+Access-Control-Allow-Methods: GET, OPTIONS\r\n\
+Access-Control-Allow-Headers: *\r\n\
+\r\n\
+retry: 1000\r\n\
+\r\n";
+                    if socket.write_all(header.as_bytes()).await.is_err() {
+                        return;
+                    }
+
+                    let mut ping_interval = tokio::time::interval(Duration::from_secs(15));
+                    loop {
+                        tokio::select! {
+                            msg = sub_rx.recv() => {
+                                match msg {
+                                    Ok(data) => {
+                                        let sse_chunk = format!("data: {data}\n\n");
+                                        if socket.write_all(sse_chunk.as_bytes()).await.is_err() {
+                                            break;
+                                        }
+                                    }
+                                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                                    Err(_) => break,
+                                }
+                            }
+                            _ = ping_interval.tick() => {
+                                if socket.write_all(b":keep-alive\n\n").await.is_err() {
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    return;
+                }
+
+                let resp = "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+                let _ = socket.write_all(resp.as_bytes()).await;
+            });
+        }
+    });
 }
 
 struct AudioSegment {
@@ -620,6 +724,11 @@ pub async fn run_live_subtitles(
     let (_stream, mut audio_rx) = MacOsAudioStream::start()?;
     let session_start = Instant::now();
 
+    let (sub_broadcast_tx, _) = tokio::sync::broadcast::channel::<String>(64);
+    if config.sub_port > 0 {
+        start_sub_server(config.sub_port, sub_broadcast_tx.clone()).await;
+    }
+
     // In --speech mode, allow long sentences up to 15.0s unless the user set an even larger --chunk-secs
     let effective_max_secs = if config.speech_mode {
         config.chunk_secs.max(15.0)
@@ -643,6 +752,9 @@ pub async fn run_live_subtitles(
         eprintln!("│ 🎧 macOS Live System Audio Subtitles (ScreenCaptureKit)      │");
         eprintln!("╰──────────────────────────────────────────────────────────────╯");
         eprintln!("  • Provider : {}", config.provider_label);
+        if config.sub_port > 0 {
+            eprintln!("  • Subtitles: http://127.0.0.1:{}/events (Browser Injector)", config.sub_port);
+        }
         eprintln!("  • Language : {mode_str}");
         eprintln!("  • Mode     : {window_desc} (Press Ctrl+C to stop)\n");
     }
@@ -674,6 +786,7 @@ pub async fn run_live_subtitles(
     let translate = config.translate;
     let karaoke = config.karaoke;
     let transcriber_worker = Arc::clone(&transcriber);
+    let sub_broadcast_worker = sub_broadcast_tx.clone();
 
     let worker_handle = tokio::spawn(async move {
         let mut all_utterances: Vec<Utternace> = Vec::new();
@@ -700,6 +813,15 @@ pub async fn run_live_subtitles(
                                 println!("\x1b[2m[{short_ts}]\x1b[0m  \x1b[1m{subtitle}\x1b[0m");
                                 let _ = std::io::stdout().flush();
                             }
+                            let ts = format_timestamp(seg.start_offset_ms / 10, false, ".");
+                            let short_ts = ts.split('.').next().unwrap_or(&ts);
+                            let cue = serde_json::json!({
+                                "id": uuid::Uuid::new_v4().to_string(),
+                                "text": &subtitle,
+                                "timestamp": short_ts,
+                                "receivedAt": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis(),
+                            });
+                            let _ = sub_broadcast_worker.send(cue.to_string());
                             last_printed = subtitle.clone();
                             all_utterances.push(Utternace {
                                 start: seg.start_offset_ms / 10,

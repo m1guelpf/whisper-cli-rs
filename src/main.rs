@@ -81,6 +81,10 @@ struct Args {
     #[clap(long)]
     chunk_secs: Option<f32>,
 
+    /// Port for broadcasting live subtitles over HTTP/SSE to browser extensions (used with --live)
+    #[clap(long, default_value = "8989")]
+    sub_port: u16,
+
     /// API Key for the chosen provider (defaults to GROQ_API_KEY, OPENAI_API_KEY, or DEEPGRAM_API_KEY env var)
     #[clap(short = 'k', long)]
     api_key: Option<String>,
@@ -248,6 +252,7 @@ async fn main() -> Result<()> {
             stdout_only: args.stdout,
             chunk_secs,
             speech_mode: args.speech,
+            sub_port: args.sub_port,
         };
         let transcript = run_live_subtitles(Arc::new(transcriber), config).await?;
 
