@@ -1367,6 +1367,7 @@ pub async fn run_live_moonshine(config: LiveConfig) -> Result<Transcript> {
                             "receivedAt": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis(),
                             "durationMs": duration_ms,
                             "lagMs": 35,
+                            "isFinal": line.is_complete,
                         });
 
                         if line.is_complete {
