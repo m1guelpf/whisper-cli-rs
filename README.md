@@ -63,12 +63,19 @@ Ensure you have Rust installed ([rustup.rs](https://rustup.rs/)).
 
 ```bash
 git clone https://github.com/aramrw/whisper-cli && cd whisper-cli
+
+# Standard lean build (Apple Neural Engine + Whisper + Cloud providers):
 cargo build --release
+
+# Optional: with Moonshine v2 cross-platform ONNX engine:
+cargo build --release --features moonshine
 ```
 
 Install binary system-wide:
 ```bash
 cargo install --path .
+# Or with moonshine:
+cargo install --path . --features moonshine
 ```
 
 ---

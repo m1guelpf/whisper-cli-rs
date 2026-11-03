@@ -1209,6 +1209,7 @@ pub async fn run_live_apple_speech(config: LiveConfig) -> Result<Transcript> {
     })
 }
 
+#[cfg(feature = "moonshine")]
 pub async fn run_live_moonshine(config: LiveConfig) -> Result<Transcript> {
     let lang_str = config.lang.as_deref().unwrap_or("es");
     let lang_lower = lang_str.trim().to_ascii_lowercase();
@@ -1452,6 +1453,14 @@ pub async fn run_live_moonshine(config: LiveConfig) -> Result<Transcript> {
         utterances: all_utterances,
         word_utterances: None,
     })
+}
+
+#[cfg(not(feature = "moonshine"))]
+pub async fn run_live_moonshine(_config: LiveConfig) -> Result<Transcript> {
+    Err(anyhow!(
+        "The Moonshine streaming engine is not compiled into this binary.\n\
+         To enable it, build with: cargo build --release --features moonshine"
+    ))
 }
 
 #[cfg(target_os = "macos")]
