@@ -9,7 +9,7 @@ Generates transcriptions in `.txt`, `.vtt`, and `.srt` formats automatically.
 ## Features
 
 - **Native macOS Live Subtitles (`--live`)**: Tap directly into macOS system audio via Apple's `ScreenCaptureKit` (no BlackHole or virtual audio drivers required) for real-time terminal subtitles from Crunchyroll, YouTube, Netflix, or any app.
-- ⚡ **Ultra-Fast Cloud & Local Transcription**: Uses Groq (`whisper-large-v3-turbo`), OpenAI (`whisper-1`), Deepgram (`nova-3`), or local GPU-accelerated endpoints.
+- **Ultra-Fast Cloud & Local Transcription**: Uses Groq (`whisper-large-v3-turbo`), OpenAI (`whisper-1`), Deepgram (`nova-3`), or local GPU-accelerated endpoints.
 - **Universal Audio & Video Support**: Automatic `ffmpeg` pre-decoding for `.mp3`, `.mp4`, `.m4a`, `.wav`, `.mkv`, `.mov`, `.flac`, `.ogg`, and `.webm`.
 - **Multi-Provider Architecture**: Switch easily between Groq, OpenAI, Deepgram, or local/self-hosted servers.
 - **Multiple Output Formats**: Automatically writes `.txt`, `.vtt`, and `.srt` subtitle files in the same directory as the input file.
