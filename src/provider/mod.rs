@@ -17,4 +17,14 @@ pub trait Transcriber: Send + Sync {
         translate: bool,
         word_timestamps: bool,
     ) -> Result<Transcript>;
+
+    async fn transcribe_with_prompt(
+        &self,
+        audio_path: &Path,
+        translate: bool,
+        word_timestamps: bool,
+        _prompt: Option<&str>,
+    ) -> Result<Transcript> {
+        self.transcribe(audio_path, translate, word_timestamps).await
+    }
 }

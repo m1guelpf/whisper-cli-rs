@@ -63,6 +63,16 @@ impl Transcriber for GroqProvider {
         translate: bool,
         word_timestamps: bool,
     ) -> Result<Transcript> {
+        self.transcribe_with_prompt(audio_path, translate, word_timestamps, None).await
+    }
+
+    async fn transcribe_with_prompt(
+        &self,
+        audio_path: &Path,
+        translate: bool,
+        word_timestamps: bool,
+        prompt: Option<&str>,
+    ) -> Result<Transcript> {
         let file = File::open(audio_path).await?;
         let file_name = audio_path
             .file_name()
@@ -86,6 +96,13 @@ impl Transcriber for GroqProvider {
 
         if let Some(lang) = &self.lang {
             form = form.text("language", lang.clone());
+        }
+
+        if let Some(p) = prompt {
+            let trimmed = p.trim();
+            if !trimmed.is_empty() {
+                form = form.text("prompt", trimmed.to_string());
+            }
         }
 
         if word_timestamps {

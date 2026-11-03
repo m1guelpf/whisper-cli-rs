@@ -77,6 +77,7 @@ impl CustomApiProvider {
         translate: bool,
         word_timestamps: bool,
         is_inference: bool,
+        prompt: Option<&str>,
     ) -> Result<Form> {
         let file = File::open(audio_path).await?;
         let stream = FramedRead::new(file, BytesCodec::new());
@@ -96,6 +97,13 @@ impl CustomApiProvider {
             form = form.text("translate", "true");
         }
 
+        if let Some(p) = prompt {
+            let trimmed = p.trim();
+            if !trimmed.is_empty() {
+                form = form.text("prompt", trimmed.to_string());
+            }
+        }
+
         if word_timestamps && !is_inference {
             form = form.text("timestamp_granularities[]", "word");
         }
@@ -111,6 +119,16 @@ impl Transcriber for CustomApiProvider {
         audio_path: &Path,
         translate: bool,
         word_timestamps: bool,
+    ) -> Result<Transcript> {
+        self.transcribe_with_prompt(audio_path, translate, word_timestamps, None).await
+    }
+
+    async fn transcribe_with_prompt(
+        &self,
+        audio_path: &Path,
+        translate: bool,
+        word_timestamps: bool,
+        prompt: Option<&str>,
     ) -> Result<Transcript> {
         let file_name = audio_path
             .file_name()
@@ -144,7 +162,7 @@ impl Transcriber for CustomApiProvider {
         };
 
         let form = self
-            .build_form(audio_path, &file_name, translate, word_timestamps, use_inference)
+            .build_form(audio_path, &file_name, translate, word_timestamps, use_inference, prompt)
             .await?;
 
         let mut req = self.client.post(&endpoint).multipart(form);
@@ -161,7 +179,7 @@ impl Transcriber for CustomApiProvider {
             && endpoint.contains("/v1/audio/")
         {
             let form_alt = self
-                .build_form(audio_path, &file_name, translate, word_timestamps, true)
+                .build_form(audio_path, &file_name, translate, word_timestamps, true, prompt)
                 .await?;
 
             let mut req_alt = self.client.post(&inference_endpoint).multipart(form_alt);

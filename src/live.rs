@@ -458,6 +458,7 @@ fn render_live_hud(
     audio_bytes: u64,
     audio_pkts: u64,
     speech_mode: bool,
+    stage_label: &str,
 ) -> String {
     let spinner = SPINNER_FRAMES[tick % SPINNER_FRAMES.len()];
     let normalized = (rms / 0.12).clamp(0.0, 1.0).sqrt();
@@ -473,9 +474,9 @@ fn render_live_hud(
         "\x1b[33m⏳ Sending\x1b[0m".to_string()
     } else if is_speaking {
         if speech_mode {
-            format!("\x1b[32m🗣️ {speech_secs:.1}s (Voice {speech_pct}%)\x1b[0m")
+            format!("\x1b[32m🗣️ {speech_secs:.1}s (Voice {speech_pct}%){stage_label}\x1b[0m")
         } else {
-            format!("\x1b[32m🗣️ {speech_secs:.1}s/{max_secs:.0}s\x1b[0m")
+            format!("\x1b[32m🗣️ {speech_secs:.1}s/{max_secs:.1}s{stage_label}\x1b[0m")
         }
     } else if audio_bytes == 0 {
         "\x1b[2m⚪ Waiting for macOS audio...\x1b[0m".to_string()
@@ -645,6 +646,119 @@ struct AudioSegment {
     samples: Vec<f32>,
     start_offset_ms: i64,
     end_offset_ms: i64,
+    is_cold_start: bool,
+}
+
+fn update_prompt_context(prompt: &mut String, new_text: &str) {
+    let clean = new_text.trim();
+    if clean.is_empty() {
+        return;
+    }
+    if prompt.is_empty() {
+        prompt.push_str(clean);
+    } else {
+        prompt.push(' ');
+        prompt.push_str(clean);
+    }
+
+    // Keep only the most recent ~30 words (~50 tokens) to stay well within decoder prompt budget
+    let words: Vec<&str> = prompt.split_whitespace().collect();
+    if words.len() > 30 {
+        *prompt = words[words.len() - 25..].join(" ");
+    }
+}
+
+struct AdaptiveRampState {
+    is_realtime: bool,
+    speech_mode: bool,
+    base_chunk_secs: f32,
+    consecutive_utterances: usize,
+    last_utterance_end: Instant,
+}
+
+impl AdaptiveRampState {
+    fn new(is_realtime: bool, speech_mode: bool, base_chunk_secs: f32) -> Self {
+        Self {
+            is_realtime,
+            speech_mode,
+            base_chunk_secs,
+            consecutive_utterances: 0,
+            last_utterance_end: Instant::now() - Duration::from_secs(10),
+        }
+    }
+
+    fn check_silence_reset(&mut self) {
+        if self.consecutive_utterances > 0
+            && self.last_utterance_end.elapsed() > Duration::from_millis(1800)
+        {
+            self.consecutive_utterances = 0;
+        }
+    }
+
+    fn current_thresholds(&self) -> (usize, usize, usize, usize, usize, usize, usize, bool) {
+        let is_cold = self.consecutive_utterances == 0;
+
+        if self.is_realtime {
+            let (max_s, min_split_s, pause_s) = match self.consecutive_utterances {
+                0 => (3.2_f32, 1.10_f32, 0.38_f32), // Turn 0: Cold anchor (solid sentence)
+                1 => (2.2_f32, 0.70_f32, 0.26_f32), // Turn 1: Warm intermediate
+                _ => (1.4_f32, 0.45_f32, 0.18_f32), // Turn 2+: Full streaming cadence
+            };
+            (
+                (max_s * SAMPLE_RATE as f32) as usize,
+                (min_split_s * SAMPLE_RATE as f32) as usize,
+                (pause_s * SAMPLE_RATE as f32) as usize,
+                (1.5 * SAMPLE_RATE as f32) as usize,
+                (0.14 * SAMPLE_RATE as f32) as usize,
+                (0.20 * SAMPLE_RATE as f32) as usize,
+                (0.35 * SAMPLE_RATE as f32) as usize,
+                is_cold,
+            )
+        } else if self.speech_mode {
+            let max_s = self.base_chunk_secs.max(15.0);
+            (
+                (max_s * SAMPLE_RATE as f32) as usize,
+                (1.10 * SAMPLE_RATE as f32) as usize,
+                (0.46 * SAMPLE_RATE as f32) as usize,
+                (7.5 * SAMPLE_RATE as f32) as usize,
+                (0.24 * SAMPLE_RATE as f32) as usize,
+                (0.32 * SAMPLE_RATE as f32) as usize,
+                (0.68 * SAMPLE_RATE as f32) as usize,
+                is_cold,
+            )
+        } else {
+            let max_s = self.base_chunk_secs.clamp(1.5, 15.0);
+            (
+                (max_s * SAMPLE_RATE as f32) as usize,
+                (0.80 * SAMPLE_RATE as f32) as usize,
+                (0.36 * SAMPLE_RATE as f32) as usize,
+                (6.0 * SAMPLE_RATE as f32) as usize,
+                (0.20 * SAMPLE_RATE as f32) as usize,
+                (0.30 * SAMPLE_RATE as f32) as usize,
+                (0.60 * SAMPLE_RATE as f32) as usize,
+                is_cold,
+            )
+        }
+    }
+
+    fn record_emission(&mut self) -> bool {
+        let was_cold = self.consecutive_utterances == 0;
+        self.consecutive_utterances = self.consecutive_utterances.saturating_add(1);
+        self.last_utterance_end = Instant::now();
+        was_cold
+    }
+
+    fn stage_label(&self) -> &'static str {
+        if !self.is_realtime {
+            ""
+        } else {
+            match self.consecutive_utterances {
+                0 => " [Anchor ⚓]",
+                1 => " [Warming 🚀]",
+                _ => " [Realtime ⚡]",
+            }
+        }
+    }
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -726,6 +840,7 @@ pub async fn run_audio_test() -> Result<()> {
                     bytes,
                     pkts,
                     true,
+                    "",
                 );
                 eprint!("\r\x1b[2K{hud} ({sr}Hz)");
                 let _ = std::io::stderr().flush();
@@ -768,15 +883,7 @@ pub async fn run_live_subtitles(
     }
 
     let is_realtime = config.preset == Some(crate::server::ServerPreset::Realtime);
-
-    // In realtime preset, enforce tight 1.2s-2.5s chunks; in --speech mode allow up to 15s sentences
-    let effective_max_secs = if is_realtime {
-        config.chunk_secs.clamp(1.2, 2.5)
-    } else if config.speech_mode {
-        config.chunk_secs.max(15.0)
-    } else {
-        config.chunk_secs.clamp(1.5, 15.0)
-    };
+    let mut ramp = AdaptiveRampState::new(is_realtime, config.speech_mode, config.chunk_secs);
 
     if !config.stdout_only {
         let lang_str = config.lang.as_deref().unwrap_or("auto-detect");
@@ -786,11 +893,13 @@ pub async fn run_live_subtitles(
             lang_str.to_string()
         };
         let window_desc = if is_realtime {
-            format!("Near-Real-Time Streaming ({effective_max_secs:.1}s rolling chunks, 0.18s micro-pauses)")
+            "Adaptive Near-Real-Time (3.2s Anchor ⚓ -> 1.4s Realtime ⚡, Prompt Chained)".to_string()
         } else if config.speech_mode {
-            format!("Smart Speech VAD (waits for sentence end up to {effective_max_secs:.0}s, filters SFX/music)")
+            let eff_max = config.chunk_secs.max(15.0);
+            format!("Smart Speech VAD (waits for sentence end up to {eff_max:.0}s, filters SFX/music)")
         } else {
-            format!("{:.1}s adaptive VAD chunks", effective_max_secs)
+            let eff_max = config.chunk_secs.clamp(1.5, 15.0);
+            format!("{:.1}s adaptive VAD chunks", eff_max)
         };
         eprintln!("╭──────────────────────────────────────────────────────────────╮");
         eprintln!("│ 🎧 macOS Live System Audio Subtitles (ScreenCaptureKit)      │");
@@ -810,48 +919,13 @@ pub async fn run_live_subtitles(
     let is_transcribing = Arc::new(AtomicBool::new(false));
     let is_transcribing_ui = Arc::clone(&is_transcribing);
 
-    let max_chunk_samples = (effective_max_secs * SAMPLE_RATE as f32) as usize;
-    let soft_long_sentence_samples = if is_realtime {
-        (1.5 * SAMPLE_RATE as f32) as usize
-    } else {
-        (7.5 * SAMPLE_RATE as f32) as usize
-    };
-    let min_pause_split_samples = if is_realtime {
-        (0.55 * SAMPLE_RATE as f32) as usize
-    } else {
-        (1.10 * SAMPLE_RATE as f32) as usize
-    };
-    let short_phrase_min_samples = if is_realtime {
-        (0.20 * SAMPLE_RATE as f32) as usize
-    } else {
-        (0.32 * SAMPLE_RATE as f32) as usize
-    };
-    let pause_silence_samples = if is_realtime {
-        // Fast 0.18s micro-pause split for rapid dialogue
-        (0.18 * SAMPLE_RATE as f32) as usize
-    } else if config.speech_mode {
-        // Wait ~0.46s of non-speech so natural mid-sentence word gaps aren't cut prematurely
-        (0.46 * SAMPLE_RATE as f32) as usize
-    } else {
-        (0.36 * SAMPLE_RATE as f32) as usize
-    };
-    let breath_pause_samples = if is_realtime {
-        (0.14 * SAMPLE_RATE as f32) as usize
-    } else {
-        (0.24 * SAMPLE_RATE as f32) as usize
-    };
-    let long_silence_samples = if is_realtime {
-        (0.35 * SAMPLE_RATE as f32) as usize
-    } else {
-        (0.68 * SAMPLE_RATE as f32) as usize
-    };
     let pre_roll_capacity = if is_realtime {
         (0.20 * SAMPLE_RATE as f32) as usize
     } else {
         (0.35 * SAMPLE_RATE as f32) as usize
     };
     let overlap_samples = if is_realtime {
-        (0.10 * SAMPLE_RATE as f32) as usize
+        (0.12 * SAMPLE_RATE as f32) as usize
     } else {
         (0.18 * SAMPLE_RATE as f32) as usize
     };
@@ -870,18 +944,30 @@ pub async fn run_live_subtitles(
     let worker_handle = tokio::spawn(async move {
         let mut all_utterances: Vec<Utternace> = Vec::new();
         let mut last_printed = String::new();
+        let mut prompt_context = String::new();
 
         while let Some(seg) = segment_rx.recv().await {
             is_transcribing.store(true, Ordering::Relaxed);
 
+            if seg.is_cold_start {
+                prompt_context.clear();
+            }
+
+            let prompt_opt = if prompt_context.trim().is_empty() {
+                None
+            } else {
+                Some(prompt_context.as_str())
+            };
+
             if let Ok(wav) = TempWavFile::new(&seg.samples) {
                 match transcriber_worker
-                    .transcribe(wav.path(), translate, karaoke)
+                    .transcribe_with_prompt(wav.path(), translate, karaoke, prompt_opt)
                     .await
                 {
                     Ok(transcript) => {
                         let subtitle = clean_subtitle_text(&transcript);
                         if !subtitle.is_empty() && subtitle != last_printed {
+                            update_prompt_context(&mut prompt_context, &subtitle);
                             if stdout_only {
                                 println!("{subtitle}");
                                 let _ = std::io::stdout().flush();
@@ -932,7 +1018,8 @@ pub async fn run_live_subtitles(
     });
 
     let mut pre_roll: VecDeque<f32> = VecDeque::with_capacity(pre_roll_capacity + 2048);
-    let mut speech_buffer: Vec<f32> = Vec::with_capacity(max_chunk_samples + 4096);
+    let max_buffer_capacity = (15.0 * SAMPLE_RATE as f32) as usize;
+    let mut speech_buffer: Vec<f32> = Vec::with_capacity(max_buffer_capacity + 4096);
     let mut spark_history: VecDeque<f32> = VecDeque::from(vec![0.0; 16]);
     let mut speech_detector = SpeechDetector::new();
     let mut speaking = false;
@@ -978,8 +1065,23 @@ pub async fn run_live_subtitles(
                     }
                 }
 
+                if !speaking {
+                    ramp.check_silence_reset();
+                }
+
                 // When < 0.005 packets are gated in macos_audio.m, flush active speech once silence duration is reached
                 if speaking {
+                    let (
+                        _max_chunk_samples,
+                        min_pause_split_samples,
+                        pause_silence_samples,
+                        soft_long_sentence_samples,
+                        breath_pause_samples,
+                        short_phrase_min_samples,
+                        long_silence_samples,
+                        _is_cold,
+                    ) = ramp.current_thresholds();
+
                     let elapsed_silence_samples =
                         (last_speech_instant.elapsed().as_secs_f32() * SAMPLE_RATE as f32) as usize;
                     let effective_silence = silence_samples.max(elapsed_silence_samples);
@@ -1007,10 +1109,12 @@ pub async fn run_live_subtitles(
 
                         if compute_rms(&chunk) >= 0.005 || compute_peak(&chunk) >= 0.015 {
                             let now_ms = session_start.elapsed().as_millis() as i64;
+                            let was_cold = ramp.record_emission();
                             let _ = segment_tx.try_send(AudioSegment {
                                 samples: chunk,
                                 start_offset_ms: segment_start_ms,
                                 end_offset_ms: now_ms,
+                                is_cold_start: was_cold,
                             });
                         }
                     }
@@ -1023,6 +1127,9 @@ pub async fn run_live_subtitles(
                     let in_flight = is_transcribing_ui.load(Ordering::Relaxed);
                     let speech_secs = speech_buffer.len() as f32 / SAMPLE_RATE as f32;
 
+                    let (curr_max_samples, _, _, _, _, _, _, _) = ramp.current_thresholds();
+                    let curr_max_secs = curr_max_samples as f32 / SAMPLE_RATE as f32;
+
                     let hud = render_live_hud(
                         tick,
                         current_rms,
@@ -1031,11 +1138,12 @@ pub async fn run_live_subtitles(
                         &spark_history,
                         speaking,
                         speech_secs,
-                        effective_max_secs,
+                        curr_max_secs,
                         in_flight,
                         bytes,
                         pkts,
                         speech_mode,
+                        ramp.stage_label(),
                     );
                     eprint!("\r\x1b[2K{hud}");
                     let _ = std::io::stderr().flush();
@@ -1076,6 +1184,7 @@ pub async fn run_live_subtitles(
                 let now_ms = session_start.elapsed().as_millis() as i64;
 
                 if !speaking {
+                    ramp.check_silence_reset();
                     if frame_has_speech {
                         speaking = true;
                         last_speech_instant = Instant::now();
@@ -1106,6 +1215,17 @@ pub async fn run_live_subtitles(
                     silence_samples += samples.len();
                 }
 
+                let (
+                    max_chunk_samples,
+                    min_pause_split_samples,
+                    pause_silence_samples,
+                    soft_long_sentence_samples,
+                    breath_pause_samples,
+                    short_phrase_min_samples,
+                    long_silence_samples,
+                    _is_cold,
+                ) = ramp.current_thresholds();
+
                 let natural_pause_ready = speech_buffer.len() >= min_pause_split_samples
                     && silence_samples >= pause_silence_samples;
                 // In --speech mode, if a sentence is already > 7.5s long, split on any 0.24s breath pause
@@ -1130,15 +1250,17 @@ pub async fn run_live_subtitles(
                     active_speech_samples = 0;
 
                     if compute_rms(&chunk) >= 0.005 || compute_peak(&chunk) >= 0.015 {
+                        let was_cold = ramp.record_emission();
                         let _ = segment_tx.try_send(AudioSegment {
                             samples: chunk,
                             start_offset_ms: segment_start_ms,
                             end_offset_ms: now_ms,
+                            is_cold_start: was_cold,
                         });
                     }
                 } else if speech_buffer.len() >= max_chunk_samples {
-                    // Reached safety max window: split at quietest micro-pause in last 0.65s
-                    let search_win = (0.65 * SAMPLE_RATE as f32) as usize;
+                    // Reached safety max window: split at quietest micro-pause in last 0.50s
+                    let search_win = (0.50 * SAMPLE_RATE as f32) as usize;
                     let split_at = find_best_split_index(&speech_buffer, search_win);
 
                     let chunk = speech_buffer[..split_at].to_vec();
@@ -1146,10 +1268,12 @@ pub async fn run_live_subtitles(
                     let remainder = speech_buffer[keep_from..].to_vec();
 
                     if compute_rms(&chunk) >= 0.005 || compute_peak(&chunk) >= 0.015 {
+                        let was_cold = ramp.record_emission();
                         let _ = segment_tx.try_send(AudioSegment {
                             samples: chunk,
                             start_offset_ms: segment_start_ms,
                             end_offset_ms: now_ms,
+                            is_cold_start: was_cold,
                         });
                     }
 
@@ -1164,8 +1288,9 @@ pub async fn run_live_subtitles(
     }
 
     // Flush any remaining speech on exit
+    let exit_min_phrase = (0.20 * SAMPLE_RATE as f32) as usize;
     if speaking
-        && active_speech_samples >= short_phrase_min_samples
+        && active_speech_samples >= exit_min_phrase
         && (compute_rms(&speech_buffer) >= 0.005 || compute_peak(&speech_buffer) >= 0.015)
     {
         let now_ms = session_start.elapsed().as_millis() as i64;
@@ -1174,6 +1299,7 @@ pub async fn run_live_subtitles(
                 samples: speech_buffer,
                 start_offset_ms: segment_start_ms,
                 end_offset_ms: now_ms,
+                is_cold_start: false,
             })
             .await;
     }
