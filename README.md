@@ -4,7 +4,11 @@ A high-performance command line tool in Rust for transcribing audio and video fi
 
 Generates transcriptions in `.txt`, `.vtt`, and `.srt` formats automatically.
 
+Recommended companion Chrome & Firefox extension: [whisper-cli](https://github.com/aramrw/whisper-cli-sub-injector).
+
 ---
+
+> **--live** flag cli example
 
 ```
 ~/Programming/whisper-cli> whisper --live --speech --preset fast -l es -m large-v3-turbo-q5_0
