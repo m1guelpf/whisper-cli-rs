@@ -9,7 +9,7 @@ mod utils;
 
 use whisper_cli::{
     live::{run_audio_test, run_live_subtitles, LiveConfig},
-    server::{run_server_foreground, ManagedServer, ServerConfig, ServerPreset},
+    server::{resolve_model_path, run_server_foreground, ManagedServer, ServerConfig, ServerPreset},
     CustomApiProvider, DeepgramProvider, GroqProvider, OpenAiProvider, Transcriber,
 };
 
@@ -244,8 +244,13 @@ async fn main() -> Result<()> {
             args.preset
                 .map_or(4.0, ServerPreset::recommended_chunk_secs)
         });
+        let model_label = resolve_model_path(args.model.as_deref())
+            .ok()
+            .and_then(|p| p.file_name().map(|f| f.to_string_lossy().to_string()))
+            .or_else(|| args.model.clone());
         let config = LiveConfig {
             provider_label: provider_label(&args),
+            model: model_label,
             lang: args.lang.clone(),
             translate: args.translate,
             karaoke: args.karaoke,

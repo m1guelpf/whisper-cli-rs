@@ -492,6 +492,7 @@ fn render_live_hud(
 
 pub struct LiveConfig {
     pub provider_label: String,
+    pub model: Option<String>,
     pub lang: Option<String>,
     pub translate: bool,
     pub karaoke: bool,
@@ -752,6 +753,9 @@ pub async fn run_live_subtitles(
         eprintln!("│ 🎧 macOS Live System Audio Subtitles (ScreenCaptureKit)      │");
         eprintln!("╰──────────────────────────────────────────────────────────────╯");
         eprintln!("  • Provider : {}", config.provider_label);
+        if let Some(m) = &config.model {
+            eprintln!("  • Model    : {m}");
+        }
         if config.sub_port > 0 {
             eprintln!("  • Subtitles: http://127.0.0.1:{}/events (Browser Injector)", config.sub_port);
         }
