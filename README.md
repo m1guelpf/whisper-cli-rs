@@ -174,6 +174,10 @@ Run fast and accurate (100-200ms, 1-2% WER accuracy), word by word streaming spe
 - **Direct Browser Overlay Broadcast Compatible**: Broadcasts live word cues to `http://127.0.0.1:8989/events` for the [whisper-cli-sub-injector](https://github.com/aramrw/whisper-cli-sub-injector) extension.
 - **Auto-Pause Finalization**: Commits sentences instantly when you stop/pause the video.
 
+### Download Apple model steps
+1. Enable Dictation in the settings, and select your target language(s).
+2. Enable siri (temporarily), select your target language(s) again and let them download. You can disable siri after (but keep dictation enabled). 
+
 ```bash
 # Stream live Spanish subtitles (ultra-low latency)
 whisper --apple -l es
