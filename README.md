@@ -1,3 +1,4 @@
+
 # whisper-cli
 
 A high-performance command line tool in Rust for transcribing audio and video files using modern Speech-to-Text APIs (Groq, OpenAI, Deepgram) and self-hosted local OpenAI-compatible endpoints (`whisper-server`, Faster-Whisper, Ollama, LocalAI, vLLM).
@@ -8,6 +9,9 @@ Generates transcriptions in `.txt`, `.vtt`, and `.srt` formats, or directly in t
 
 ### Recommended companion Chrome & Firefox extension: 
 **https://github.com/aramrw/whisper-cli-sub-injector**
+
+   <img width="377.5" height="172.5" alt="st_overlayd" src="https://github.com/user-attachments/assets/5be1d420-0bcf-4af0-91bd-61351834a639" />
+
 
 ---
 
