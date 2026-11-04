@@ -144,13 +144,13 @@ whisper -p custom -u http://localhost:8080 -l es -s audio.mp3
 > Pros
 
 - **~50-100ms Latency**: Eliminates Whisper's 30-second quadratic attention overhead.
-- **Direct Browser Overlay Broadcast**: Broadcasts live partial and finalized cues to `http://127.0.0.1:8989/events` for the [whisper-cli-sub-injector]
+- **Direct Browser Overlay Broadcast**: Broadcasts live partial and finalized cues to `http://127.0.0.1:8989/events` for the [whisper-cli-sub-injector](https://github.com/aramrw/whisper-cli-sub-injector)
 - **Capitalization & Punctuation**: Moonshine has full sentence level punctuation. 
-- - **Automatic Model Caching**: Auto-downloads and caches optimized ONNX models from Moonshine CDN on first launch with no manual setup.
+- **Automatic Model Caching**: Auto-downloads and caches optimized ONNX models from Moonshine CDN on first launch with no manual setup.
 
 > Cons
 
-- ** Accuracy claims to have 4.9% WER in Spanish)**, in reality it frequently has problems with shows with overlayed sound effects, low audio, and other artifacts. In comparison with whisper for non-macos for realtime transcribing, you're sacrificing near 0.5-2% WER accuracy for line delayed latency. 
+- **Accuracy claims to have 4.9% [WER](https://en.wikipedia.org/wiki/Word_error_rate) in Spanish**, in reality it frequently has problems with shows with overlayed sound effects, low quality audio, and other artifacts. In comparison with whisper (for non-macos) realtime transcribing, you're sacrificing near 0.5-2% WER accuracy for line delayed latency. 
 
 ```bash
 # Stream live Spanish subtitles (Small Streaming, 4.9% WER)
