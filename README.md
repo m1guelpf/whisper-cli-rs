@@ -1,9 +1,13 @@
 
 # whisper-cli
 
-A high-performance command line tool in Rust for transcribing audio and video files using modern Speech-to-Text APIs (Groq, OpenAI, Deepgram) and self-hosted local OpenAI-compatible endpoints (`whisper-server`, Faster-Whisper, Ollama, LocalAI, vLLM).
+A high-performance command-line tool in Rust for real-time speech recognition, live system audio captioning, and batch audio transcription.
 
-Generates transcriptions in `.txt`, `.vtt`, and `.srt` formats, or directly in the terminal.
+Supports on-device streaming engines (Apple Neural Engine via --apple, for cross platform, Moonshine v2 via --moonshine), cloud Speech-to-Text APIs (Groq, OpenAI, Deepgram), and self-hosted OpenAI-compatible endpoints (whisper-server, Faster-Whisper, Ollama, LocalAI, vLLM). 
+
+### macOS features
+
+near Zero-latency (100-200ms) macOS system audio loopback via `ScreenCaptureKit` (no blackhole needed) with live HTTP/SSE broadcasting to browser extensions for real-time video subtitles, outputting transcripts directly to the terminal or exporting to `.txt`, `.vtt`, and `.srt` formats.
 
 --- 
 
@@ -11,7 +15,6 @@ Generates transcriptions in `.txt`, `.vtt`, and `.srt` formats, or directly in t
 **https://github.com/aramrw/whisper-cli-sub-injector**
 
    <img width="377.5" height="172.5" alt="st_overlayd" src="https://github.com/user-attachments/assets/5be1d420-0bcf-4af0-91bd-61351834a639" />
-
 
 ---
 
