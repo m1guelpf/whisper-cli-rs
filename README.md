@@ -128,7 +128,7 @@ whisper --serve accurate -l ja
 
 You can also override the model (`-m medium` or `-m /path/to/model.bin`), port (`--port 8081`), or append custom flags (`--server-args "-nth 0.6"`).
 
-### 4. Transcribe a File with `whisper-cli`
+## 4. Transcribe files with `whisper-cli`
 ```bash
 whisper -p custom -u http://localhost:8080 audio.mp3
 ```
@@ -137,8 +137,6 @@ whisper -p custom -u http://localhost:8080 audio.mp3
 ```bash
 whisper -p custom -u http://localhost:8080 -l es -s audio.mp3
 ```
-
----
 
 ## Moonshine v2 Ultra-Fast live transcribing (`--moonshine`)
 
