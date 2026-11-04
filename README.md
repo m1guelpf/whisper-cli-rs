@@ -2,7 +2,7 @@
 
 A high-performance command line tool in Rust for transcribing audio and video files using modern Speech-to-Text APIs (Groq, OpenAI, Deepgram) and self-hosted local OpenAI-compatible endpoints (`whisper-server`, Faster-Whisper, Ollama, LocalAI, vLLM).
 
-Generates transcriptions in `.txt`, `.vtt`, and `.srt` formats automatically.
+Generates transcriptions in `.txt`, `.vtt`, and `.srt` formats, or directly in the terminal.
 
 --- 
 
