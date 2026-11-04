@@ -48,22 +48,6 @@ near Zero-latency (100-200ms) macOS system audio loopback via `ScreenCaptureKit`
 
 ---
 
-## Features
-
-- ⚡ **Moonshine v2 Ultra-Fast Streaming (`--moonshine`)**: State-of-the-art open-weights streaming speech recognition by Useful Sensors. Utilizes variable-length linear ergodic attention ($O(T)$) to deliver **~35-50ms inference latency** with **4.9% WER** (Spanish Small Streaming). Fully offline, zero Python, auto-downloads and caches ONNX model assets, and streams with full capitalization & punctuation directly to terminal and browser extension.
-- ⚡ **Native Apple Neural Engine Streaming (`--apple`)**: Zero-lag real-time streaming speech recognition powered by macOS's native `SpeechAnalyzer` and `SpeechTranscriber`. Words stream out frame-by-frame as they are spoken with zero model download and no server required.
-- 🎧 **Native macOS Live Subtitles (`--live`)**: Tap directly into macOS system audio via Apple's `ScreenCaptureKit` (no BlackHole or virtual audio drivers required) for real-time terminal subtitles from Crunchyroll, YouTube, Netflix, or any app.
-- 🌐 **Browser Extension Live Injection (`:8989/events`)**: Streams live subtitles with zero latency to the [whisper-cli-sub-injector](https://github.com/aramrw/whisper-cli-sub-injector) extension, supporting smart `Left Arrow` (`←`) replay navigation and sentence retiming.
-- ⚡ **Ultra-Fast Cloud & Local Transcription**: Uses Groq (`whisper-large-v3-turbo`), OpenAI (`whisper-1`), Deepgram (`nova-3`), or local GPU-accelerated endpoints (`whisper.cpp`).
-- 🎬 **Universal Audio & Video Support**: Automatic `ffmpeg` pre-decoding for `.mp3`, `.mp4`, `.m4a`, `.wav`, `.mkv`, `.mov`, `.flac`, `.ogg`, and `.webm`.
-- 🌐 **Multi-Provider Architecture**: Switch easily between Groq, OpenAI, Deepgram, or local/self-hosted servers.
-- 📝 **Multiple Output Formats**: Automatically writes `.txt`, `.vtt`, and `.srt` subtitle files in the same directory as the input file.
-- 📺 **Terminal Output Mode**: Use `-s` / `--stdout` to output transcript text directly to standard output without saving files.
-- ⏱️ **Word-level Timestamps**: Generate karaoke-style word timestamps with `--karaoke`.
-- 🌍 **Language Selection & Translation**: Explicit language specification (`-l es`, `-l en`, `-l ja`) and direct translation to English (`-t / --translate`).
-
----
-
 ## Installation & Build
 
 Ensure you have Rust installed ([rustup.rs](https://rustup.rs/)).
