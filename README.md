@@ -132,11 +132,12 @@ You can also override the model (`-m medium` or `-m /path/to/model.bin`), port (
 ```bash
 whisper -p custom -u http://localhost:8080 audio.mp3
 ```
-#### `-s` `(--stdout)` displays subs directly in the terminal.
+> creates  a `.srt` `.vtt` & `.txt` subtitle files.
 
 ```bash
 whisper -p custom -u http://localhost:8080 -l es -s audio.mp3
 ```
+> `-s` `(--stdout)` displays subs directly in the terminal.
 
 ## Moonshine v2 Ultra-Fast live transcribing (`--moonshine`)
 
