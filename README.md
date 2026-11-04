@@ -140,15 +140,18 @@ whisper -p custom -u http://localhost:8080 -l es -s audio.mp3
 
 ---
 
-## ⚡ Moonshine v2 Ultra-Fast Streaming (`--moonshine`)
+## Moonshine v2 Ultra-Fast live transcribing (`--moonshine`)
 
-Run state-of-the-art open-weights streaming speech recognition using **Moonshine v2** (Useful Sensors):
+> Pros
 
-- **~35-50ms Latency**: Linear-time ergodic attention ($O(T)$) eliminates Whisper's 30-second quadratic attention overhead.
-- **Top-Tier Accuracy (4.9% WER in Spanish)**: Small Streaming model hits near-human accuracy on standard benchmarks (FLEURS / MLS).
-- **Full Capitalization & Punctuation**: Generates clean, readable sentences with proper capitalization, accents, and punctuation.
-- **Automatic Model Caching**: Auto-downloads and caches optimized ONNX models from Moonshine CDN on first launch with zero manual setup.
-- **Direct Browser Overlay Broadcast**: Broadcasts live partial and finalized cues to `http://127.0.0.1:8989/events` for the [whisper-cli-sub-injector](https://github.com/aramrw/whisper-cli-sub-injector) extension.
+- **~50-100ms Latency**: Eliminates Whisper's 30-second quadratic attention overhead.
+- **Direct Browser Overlay Broadcast**: Broadcasts live partial and finalized cues to `http://127.0.0.1:8989/events` for the [whisper-cli-sub-injector]
+- **Capitalization & Punctuation**: Moonshine has full sentence level punctuation. 
+- - **Automatic Model Caching**: Auto-downloads and caches optimized ONNX models from Moonshine CDN on first launch with no manual setup.
+
+> Cons
+
+- ** Accuracy claims to have 4.9% WER in Spanish)**, in reality it frequently has problems with shows with overlayed sound effects, low audio, and other artifacts. In comparison with whisper for non-macos for realtime transcribing, you're sacrificing near 0.5-2% WER accuracy for line delayed latency. 
 
 ```bash
 # Stream live Spanish subtitles (Small Streaming, 4.9% WER)
@@ -163,13 +166,13 @@ whisper --moonshine -l ja
 
 ---
 
-## ⚡ Apple Neural Engine Zero-Lag Streaming (`--apple`)
+## (macOS only) Apple Neural Engine Zero-Lag Streaming (`--apple`)
 
-Run true zero-lag, frame-by-frame streaming speech recognition directly on the **Apple Neural Engine (ANE)** using macOS's native `SpeechAnalyzer` + `SpeechTranscriber`:
+Run fast and accurate (100-200ms, 1-2% WER accuracy), word by word streaming speech recognition directly on the **Apple Neural Engine (ANE)** using macOS's native `SpeechAnalyzer` + `SpeechTranscriber`:
 
-- **Sub-50ms Latency**: Words stream onto your screen as each syllable is spoken (no chunking, no sliding windows).
+- **200ms Latency**: Words stream onto your screen as each word is spoken (no chunking, no sliding windows) with very high accuracy and low latency, great for shows & anime. 
 - **100% Local & Zero Model Downloads**: Uses built-in OS speech assets managed by `AssetInventory`.
-- **Direct Browser Overlay Broadcast**: Broadcasts live word cues to `http://127.0.0.1:8989/events` for the [whisper-cli-sub-injector](https://github.com/aramrw/whisper-cli-sub-injector) extension.
+- **Direct Browser Overlay Broadcast Compatible**: Broadcasts live word cues to `http://127.0.0.1:8989/events` for the [whisper-cli-sub-injector](https://github.com/aramrw/whisper-cli-sub-injector) extension.
 - **Auto-Pause Finalization**: Commits sentences instantly when you stop/pause the video.
 
 ```bash
