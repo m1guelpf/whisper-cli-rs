@@ -45,7 +45,7 @@ extern "C" {
     fn wisp_applespeech_start(
         locale: *const c_char,
         ctx: *mut c_void,
-        callback: extern "C" fn(*mut c_void, *const c_char, bool),
+        callback: extern "C" fn(*mut c_void, *const c_char, bool, f64, f64),
     ) -> *mut c_void;
     fn wisp_applespeech_feed(handle: *mut c_void, samples: *const f32, count: usize, rate: f64);
     fn wisp_applespeech_stop(handle: *mut c_void);
@@ -879,6 +879,184 @@ pub async fn run_live_subtitles(
     ))
 }
 
+#[derive(Debug, Clone)]
+struct FedChunk {
+    start_sample: u64,
+    end_sample: u64,
+    start_session_ms: i64,
+    end_session_ms: i64,
+    is_real_audio: bool,
+}
+
+/// Maps cumulative sample offsets fed into a streaming recognizer (16 kHz) back to exact
+/// session wall-clock milliseconds (`start_session_ms` .. `end_session_ms`), while stripping
+/// silence gaps between utterances and synthetic trailing silence chunks.
+#[derive(Debug, Default)]
+struct SampleClockTracker {
+    chunks: VecDeque<FedChunk>,
+    total_fed_samples: u64,
+    phrase_floor_sample: u64,
+    active_burst_start_ms: Option<i64>,
+    locked_utterance_start_ms: Option<i64>,
+    last_real_audio_ms: i64,
+}
+
+impl SampleClockTracker {
+    fn new() -> Self {
+        Self {
+            chunks: VecDeque::with_capacity(4096),
+            total_fed_samples: 0,
+            phrase_floor_sample: 0,
+            active_burst_start_ms: None,
+            locked_utterance_start_ms: None,
+            last_real_audio_ms: 0,
+        }
+    }
+
+    fn record_feed(&mut self, sample_count: usize, now_ms: i64, is_real_audio: bool) {
+        if sample_count == 0 {
+            return;
+        }
+        let chunk_dur_ms = ((sample_count as i64) * 1000 / SAMPLE_RATE as i64).max(1);
+        let start_session_ms = (now_ms - chunk_dur_ms).max(0);
+        let start_sample = self.total_fed_samples;
+        let end_sample = start_sample + sample_count as u64;
+        self.total_fed_samples = end_sample;
+
+        if is_real_audio {
+            // If we haven't locked an active utterance yet and there was a silence gap (>350ms)
+            // since the last real audio packet, reset the burst floor to this exact first byte.
+            let had_silence_gap = self.last_real_audio_ms > 0
+                && (start_session_ms - self.last_real_audio_ms) > 350;
+            if self.active_burst_start_ms.is_none()
+                || (self.locked_utterance_start_ms.is_none() && had_silence_gap)
+            {
+                self.active_burst_start_ms = Some(start_session_ms);
+                self.phrase_floor_sample = start_sample;
+            }
+            self.last_real_audio_ms = now_ms;
+        }
+
+        if self.chunks.len() >= 4096 {
+            self.chunks.pop_front();
+        }
+        self.chunks.push_back(FedChunk {
+            start_sample,
+            end_sample,
+            start_session_ms,
+            end_session_ms: now_ms,
+            is_real_audio,
+        });
+    }
+
+    fn sample_to_real_start_ms(&self, sample_idx: u64) -> Option<i64> {
+        let target = sample_idx.max(self.phrase_floor_sample);
+        for c in &self.chunks {
+            if !c.is_real_audio || c.end_sample <= target {
+                continue;
+            }
+            if target <= c.start_sample {
+                return Some(c.start_session_ms);
+            }
+            let span_samples = (c.end_sample - c.start_sample).max(1) as f64;
+            let offset_samples = (target - c.start_sample) as f64;
+            let span_ms = (c.end_session_ms - c.start_session_ms).max(0) as f64;
+            return Some(c.start_session_ms + (span_ms * (offset_samples / span_samples)).round() as i64);
+        }
+        None
+    }
+
+    fn sample_to_real_end_ms(&self, sample_idx: u64) -> Option<i64> {
+        let target = sample_idx.max(self.phrase_floor_sample);
+        for c in self.chunks.iter().rev() {
+            if !c.is_real_audio || c.start_sample > target {
+                continue;
+            }
+            if target >= c.end_sample {
+                return Some(c.end_session_ms);
+            }
+            let span_samples = (c.end_sample - c.start_sample).max(1) as f64;
+            let offset_samples = (target - c.start_sample) as f64;
+            let span_ms = (c.end_session_ms - c.start_session_ms).max(0) as f64;
+            return Some(c.start_session_ms + (span_ms * (offset_samples / span_samples)).round() as i64);
+        }
+        None
+    }
+
+    /// Resolves `(clip_start_ms, clip_end_ms)` in session milliseconds for a partial or final result.
+    fn resolve_clip_bounds(
+        &mut self,
+        range_start_sec: f64,
+        range_dur_sec: f64,
+        now_ms: i64,
+        is_final: bool,
+    ) -> (i64, i64) {
+        let mapped_start = if range_start_sec >= 0.0 {
+            let start_sample = (range_start_sec * SAMPLE_RATE as f64).round() as u64;
+            self.sample_to_real_start_ms(start_sample)
+        } else {
+            None
+        };
+
+        let clip_start_ms = match (mapped_start, self.locked_utterance_start_ms) {
+            (Some(ms), _) => {
+                // Lock the utterance start on first valid measurement; allow slight earlier refinement
+                let refined = match self.locked_utterance_start_ms {
+                    Some(prev) => prev.min(ms).max(self.active_burst_start_ms.unwrap_or(0)),
+                    None => ms,
+                };
+                self.locked_utterance_start_ms = Some(refined);
+                refined
+            }
+            (None, Some(locked)) => locked,
+            (None, None) => {
+                let fallback = self
+                    .active_burst_start_ms
+                    .unwrap_or_else(|| (now_ms - 250).max(0));
+                self.locked_utterance_start_ms = Some(fallback);
+                fallback
+            }
+        };
+
+        let latest_real = if self.last_real_audio_ms >= clip_start_ms {
+            self.last_real_audio_ms
+        } else {
+            now_ms
+        };
+
+        let mapped_end = if range_start_sec >= 0.0 && range_dur_sec > 0.0 {
+            let end_sample = ((range_start_sec + range_dur_sec) * SAMPLE_RATE as f64).round() as u64;
+            self.sample_to_real_end_ms(end_sample)
+        } else {
+            None
+        };
+
+        let clip_end_ms = mapped_end
+            .unwrap_or(latest_real)
+            .max(clip_start_ms + 80)
+            .min(latest_real.max(clip_start_ms + 80));
+
+        if is_final {
+            if range_start_sec >= 0.0 && range_dur_sec > 0.0 {
+                let end_sample = ((range_start_sec + range_dur_sec) * SAMPLE_RATE as f64).round() as u64;
+                self.phrase_floor_sample = end_sample.min(self.total_fed_samples);
+                self.active_burst_start_ms = Some(clip_end_ms);
+                self.locked_utterance_start_ms = None;
+            } else {
+                self.mark_utterance_finalized();
+            }
+        }
+
+        (clip_start_ms, clip_end_ms)
+    }
+
+    fn mark_utterance_finalized(&mut self) {
+        self.phrase_floor_sample = self.total_fed_samples;
+        self.active_burst_start_ms = None;
+        self.locked_utterance_start_ms = None;
+    }
+}
+
 #[cfg(target_os = "macos")]
 pub async fn run_live_apple_speech(config: LiveConfig) -> Result<Transcript> {
     let session_start = Instant::now();
@@ -921,20 +1099,20 @@ pub async fn run_live_apple_speech(config: LiveConfig) -> Result<Transcript> {
         event_tx: tokio::sync::mpsc::UnboundedSender<SpeechEvent>,
         last_id: Arc<std::sync::Mutex<String>>,
         start_instant: Instant,
-        last_phrase_instant: Arc<std::sync::Mutex<Instant>>,
+        clock_tracker: Arc<std::sync::Mutex<SampleClockTracker>>,
         all_utterances: Arc<std::sync::Mutex<Vec<Utternace>>>,
     }
 
     let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel::<SpeechEvent>();
     let all_utterances = Arc::new(std::sync::Mutex::new(Vec::new()));
     let last_id = Arc::new(std::sync::Mutex::new(uuid::Uuid::new_v4().to_string()));
-    let last_phrase_instant = Arc::new(std::sync::Mutex::new(Instant::now()));
+    let clock_tracker = Arc::new(std::sync::Mutex::new(SampleClockTracker::new()));
 
     let cb_state = Arc::new(AppleCbState {
         event_tx,
         last_id: Arc::clone(&last_id),
         start_instant: session_start,
-        last_phrase_instant: Arc::clone(&last_phrase_instant),
+        clock_tracker: Arc::clone(&clock_tracker),
         all_utterances: Arc::clone(&all_utterances),
     });
 
@@ -942,6 +1120,8 @@ pub async fn run_live_apple_speech(config: LiveConfig) -> Result<Transcript> {
         ctx: *mut c_void,
         text_ptr: *const c_char,
         is_final: bool,
+        range_start_sec: f64,
+        range_dur_sec: f64,
     ) {
         if ctx.is_null() || text_ptr.is_null() { return; }
         let c_str = unsafe { CStr::from_ptr(text_ptr) };
@@ -951,16 +1131,12 @@ pub async fn run_live_apple_speech(config: LiveConfig) -> Result<Transcript> {
 
         let state = unsafe { &*(ctx as *const AppleCbState) };
         let now_ms = state.start_instant.elapsed().as_millis() as i64;
-        let phrase_elapsed_ms = {
-            let mut last = state.last_phrase_instant.lock().unwrap();
-            let elapsed = last.elapsed().as_millis() as u64;
-            if is_final {
-                *last = Instant::now();
-            }
-            elapsed
+        let (start_ms, end_ms) = {
+            let mut tracker = state.clock_tracker.lock().unwrap();
+            tracker.resolve_clip_bounds(range_start_sec, range_dur_sec, now_ms, is_final)
         };
-        let duration_ms = phrase_elapsed_ms.max(800);
-        let start_ms = now_ms.saturating_sub(duration_ms as i64).max(0);
+        let duration_ms = (end_ms - start_ms).max(120) as u64;
+        let lag_ms = (now_ms - end_ms).max(0) as u64;
         let ts = format_timestamp(start_ms / 10, false, ".");
         let short_ts = ts.split('.').next().unwrap_or(&ts).to_string();
 
@@ -980,8 +1156,11 @@ pub async fn run_live_apple_speech(config: LiveConfig) -> Result<Transcript> {
             "text": text,
             "timestamp": short_ts,
             "receivedAt": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis(),
+            "clipStartMs": start_ms,
+            "clipEndMs": end_ms,
             "durationMs": duration_ms,
-            "lagMs": 30,
+            "lagMs": lag_ms,
+            "isFinal": is_final,
         });
 
         if is_final {
@@ -1040,6 +1219,7 @@ pub async fn run_live_apple_speech(config: LiveConfig) -> Result<Transcript> {
     let mut audio_bytes: u64 = 0;
     let mut current_preview: Option<String> = None;
     let mut pending_final: Option<serde_json::Value> = None;
+    let mut last_finalized_text = String::new();
     let mut last_audio_instant = Instant::now();
     let silence_chunk = [0.0f32; 960]; // 60ms silence at 16kHz
     let mut trailing_silence_fed = 0usize;
@@ -1055,6 +1235,10 @@ pub async fn run_live_apple_speech(config: LiveConfig) -> Result<Transcript> {
             Some(event) = event_rx.recv() => {
                 match event {
                     SpeechEvent::Partial { preview, cue_val } => {
+                        let part_text = cue_val.get("text").and_then(|v| v.as_str()).unwrap_or("");
+                        if !part_text.is_empty() && part_text == last_finalized_text {
+                            continue;
+                        }
                         current_preview = Some(preview);
                         pending_final = Some(cue_val.clone());
                         // Immediately broadcast real-time streaming words to browser extension overlay!
@@ -1063,6 +1247,10 @@ pub async fn run_live_apple_speech(config: LiveConfig) -> Result<Transcript> {
                     SpeechEvent::Final { text, short_ts, start_ms, duration_ms, cue_val } => {
                         current_preview = None;
                         pending_final = None;
+                        if text == last_finalized_text {
+                            continue;
+                        }
+                        last_finalized_text = text.clone();
 
                         // 1. Update subtitle history
                         {
@@ -1098,44 +1286,63 @@ pub async fn run_live_apple_speech(config: LiveConfig) -> Result<Transcript> {
                 tick = tick.wrapping_add(1);
                 recent_peak *= 0.92;
 
-                // When audio pauses, feed brief trailing silence to help Apple's model finalize
-                if last_audio_instant.elapsed() > Duration::from_millis(80) && trailing_silence_fed < 6 {
+                // When audio pauses, feed trailing silence (up to ~1.3s) so Apple's SpeechTranscriber
+                // naturally finalizes its turn (`result.isFinal = true`) without premature splitting.
+                if last_audio_instant.elapsed() > Duration::from_millis(80) && trailing_silence_fed < 22 {
                     trailing_silence_fed += 1;
+                    let now_ms = session_start.elapsed().as_millis() as i64;
+                    clock_tracker.lock().unwrap().record_feed(silence_chunk.len(), now_ms, false);
                     unsafe {
                         wisp_applespeech_feed(engine_ptr, silence_chunk.as_ptr(), silence_chunk.len(), 16000.0);
                     }
                 }
 
-                // If playback paused/stopped and we have unfinalized streaming speech:
-                if last_audio_instant.elapsed() > Duration::from_millis(600) {
-                    if let Some(cue_val) = pending_final.take() {
+                // Fallback only if playback paused/stopped for >1.4s and SpeechTranscriber still hasn't finalized:
+                if last_audio_instant.elapsed() > Duration::from_millis(1400) {
+                    if let Some(mut cue_val) = pending_final.take() {
+                        let now_ms = session_start.elapsed().as_millis() as i64;
                         let cue_text = cue_val.get("text").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                        let short_ts = cue_val.get("timestamp").and_then(|v| v.as_str()).unwrap_or("00:00").to_string();
-                        let dur = cue_val.get("durationMs").and_then(|v| v.as_u64()).unwrap_or(1000);
+                        if !cue_text.is_empty() && cue_text != last_finalized_text {
+                            last_finalized_text = cue_text.clone();
+                            let short_ts = cue_val.get("timestamp").and_then(|v| v.as_str()).unwrap_or("00:00").to_string();
+                            let start_ms = cue_val.get("clipStartMs").and_then(|v| v.as_i64()).unwrap_or(0);
+                            let end_ms = cue_val.get("clipEndMs").and_then(|v| v.as_i64()).unwrap_or(now_ms);
+                            let dur = cue_val.get("durationMs").and_then(|v| v.as_u64()).unwrap_or(1000);
+                            let lag_ms = (now_ms - end_ms).max(0) as u64;
 
-                        {
-                            let mut hist = sub_history.lock().unwrap();
-                            if hist.len() >= 25 {
-                                hist.pop_front();
+                            if let Some(obj) = cue_val.as_object_mut() {
+                                obj.insert("isFinal".to_string(), serde_json::Value::Bool(true));
+                                obj.insert("lagMs".to_string(), serde_json::json!(lag_ms));
                             }
-                            hist.push_back(cue_val.clone());
-                        }
-                        all_utterances.lock().unwrap().push(Utternace {
-                            start: 0,
-                            stop: dur as i64 / 10,
-                            text: cue_text.clone(),
-                        });
 
-                        if config.stdout_only {
-                            println!("{cue_text}");
-                            let _ = std::io::stdout().flush();
-                        } else {
-                            eprintln!("\r\x1b[2K\x1b[36m⚡ [{short_ts}]\x1b[0m \x1b[1m{cue_text}\x1b[0m");
-                            let _ = std::io::stderr().flush();
-                        }
+                            clock_tracker.lock().unwrap().mark_utterance_finalized();
 
-                        // Next speech will get a new ID
-                        *last_id.lock().unwrap() = uuid::Uuid::new_v4().to_string();
+                            {
+                                let mut hist = sub_history.lock().unwrap();
+                                if hist.len() >= 25 {
+                                    hist.pop_front();
+                                }
+                                hist.push_back(cue_val.clone());
+                            }
+                            let _ = sub_broadcast_tx.send(cue_val.to_string());
+
+                            all_utterances.lock().unwrap().push(Utternace {
+                                start: start_ms / 10,
+                                stop: (start_ms + dur as i64) / 10,
+                                text: cue_text.clone(),
+                            });
+
+                            if config.stdout_only {
+                                println!("{cue_text}");
+                                let _ = std::io::stdout().flush();
+                            } else {
+                                eprintln!("\r\x1b[2K\x1b[36m⚡ [{short_ts}]\x1b[0m \x1b[1m{cue_text}\x1b[0m");
+                                let _ = std::io::stderr().flush();
+                            }
+
+                            // Next speech will get a new ID
+                            *last_id.lock().unwrap() = uuid::Uuid::new_v4().to_string();
+                        }
                         current_preview = None;
                     }
                 }
@@ -1183,6 +1390,9 @@ pub async fn run_live_apple_speech(config: LiveConfig) -> Result<Transcript> {
                 audio_bytes += (samples.len() * 4) as u64;
                 last_audio_instant = Instant::now();
                 trailing_silence_fed = 0;
+
+                let now_ms = session_start.elapsed().as_millis() as i64;
+                clock_tracker.lock().unwrap().record_feed(samples.len(), now_ms, true);
 
                 unsafe {
                     wisp_applespeech_feed(engine_ptr, samples.as_ptr(), samples.len(), 16000.0);
@@ -1355,9 +1565,12 @@ pub async fn run_live_moonshine(config: LiveConfig) -> Result<Transcript> {
                         }
 
                         let start_sec = line.start_time;
-                        let duration_sec = line.duration.max(0.5);
+                        let duration_sec = line.duration.max(0.25);
                         let start_ms = (start_sec * 1000.0) as i64;
                         let duration_ms = (duration_sec * 1000.0) as u64;
+                        let end_ms = start_ms + duration_ms as i64;
+                        let now_ms = session_start.elapsed().as_millis() as i64;
+                        let lag_ms = (now_ms - end_ms).clamp(20, 2000) as u64;
                         let full_ts = format_timestamp(start_ms / 10, false, ".");
                         let short_ts = if full_ts.len() >= 5 { full_ts[..5].to_string() } else { full_ts };
 
@@ -1366,8 +1579,10 @@ pub async fn run_live_moonshine(config: LiveConfig) -> Result<Transcript> {
                             "text": text,
                             "timestamp": short_ts,
                             "receivedAt": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis(),
+                            "clipStartMs": start_ms,
+                            "clipEndMs": end_ms,
                             "durationMs": duration_ms,
-                            "lagMs": 35,
+                            "lagMs": lag_ms,
                             "isFinal": line.is_complete,
                         });
 
@@ -1585,15 +1800,19 @@ pub async fn run_live_subtitles(
                             let short_ts = ts.split('.').next().unwrap_or(&ts);
                             let now_ms = session_start_worker.elapsed().as_millis() as i64;
                             let audio_duration_ms = (seg.samples.len() * 1000 / SAMPLE_RATE) as u64;
-                            let duration_ms = audio_duration_ms.max((seg.end_offset_ms - seg.start_offset_ms).max(0) as u64);
+                            let duration_ms = ((seg.end_offset_ms - seg.start_offset_ms).max(120) as u64)
+                                .min(audio_duration_ms.max(120));
                             let lag_ms = (now_ms - seg.end_offset_ms).max(0) as u64;
                             let cue = serde_json::json!({
                                 "id": uuid::Uuid::new_v4().to_string(),
                                 "text": &subtitle,
                                 "timestamp": short_ts,
                                 "receivedAt": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis(),
+                                "clipStartMs": seg.start_offset_ms,
+                                "clipEndMs": seg.end_offset_ms,
                                 "durationMs": duration_ms,
                                 "lagMs": lag_ms,
+                                "isFinal": true,
                             });
                             {
                                 let mut hist = sub_history_worker.lock().unwrap();
@@ -1718,11 +1937,13 @@ pub async fn run_live_subtitles(
 
                         if compute_rms(&chunk) >= 0.005 || compute_peak(&chunk) >= 0.015 {
                             let now_ms = session_start.elapsed().as_millis() as i64;
+                            let silence_lag_ms = last_speech_instant.elapsed().as_millis() as i64;
+                            let speech_end_ms = (now_ms - silence_lag_ms).max(segment_start_ms + 120);
                             let was_cold = ramp.record_emission();
                             let _ = segment_tx.try_send(AudioSegment {
                                 samples: chunk,
                                 start_offset_ms: segment_start_ms,
-                                end_offset_ms: now_ms,
+                                end_offset_ms: speech_end_ms,
                                 is_cold_start: was_cold,
                             });
                         }
@@ -1853,6 +2074,8 @@ pub async fn run_live_subtitles(
                     silence_samples = 0;
                     active_speech_samples = 0;
                 } else if natural_pause_ready || long_sentence_breath_ready || short_phrase_ready {
+                    let trailing_silence_ms = (silence_samples * 1000 / SAMPLE_RATE) as i64;
+                    let speech_end_ms = (now_ms - trailing_silence_ms).max(segment_start_ms + 120);
                     let chunk = std::mem::take(&mut speech_buffer);
                     speaking = false;
                     silence_samples = 0;
@@ -1863,7 +2086,7 @@ pub async fn run_live_subtitles(
                         let _ = segment_tx.try_send(AudioSegment {
                             samples: chunk,
                             start_offset_ms: segment_start_ms,
-                            end_offset_ms: now_ms,
+                            end_offset_ms: speech_end_ms,
                             is_cold_start: was_cold,
                         });
                     }
@@ -1978,5 +2201,70 @@ mod tests {
         }
         let split = find_best_split_index(&samples, 2000);
         assert!(split >= 6400 && split <= 6900, "split was {split}");
+    }
+
+    #[test]
+    fn test_sample_clock_tracker_exact_clip_bounds() {
+        let mut tracker = SampleClockTracker::new();
+
+        // Line 1: spoken from 0ms to 2000ms (4 chunks of 8000 samples = 500ms each)
+        for step in 1..=4 {
+            tracker.record_feed(8000, step * 500, true);
+        }
+        // Trailing synthetic silence fed from 2000ms to 2360ms (6 chunks of 960 samples = 60ms each)
+        for s in 1..=6 {
+            tracker.record_feed(960, 2000 + s * 60, false);
+        }
+        // Finalize Line 1 at 2360ms (audioTimeRange: 0.0s .. 2.0s)
+        let (s1, e1) = tracker.resolve_clip_bounds(0.0, 2.0, 2360, true);
+        assert_eq!(s1, 0);
+        assert_eq!(e1, 2000);
+
+        // Now 17.64 seconds of silence pass in the video (no packets arrive).
+        // Line 2 starts at 20,000ms and ends at 21,500ms (3 chunks of 8000 samples = 500ms each).
+        tracker.record_feed(8000, 20_500, true);
+        // Partial 1 arrives at 20,520ms
+        let (p2_start, p2_end) = tracker.resolve_clip_bounds(2.36, 0.5, 20_520, false);
+        assert_eq!(p2_start, 20_000, "Line 2 must start at 20,000ms, not 2,000ms");
+        assert_eq!(p2_end, 20_500);
+
+        tracker.record_feed(8000, 21_000, true);
+        tracker.record_feed(8000, 21_500, true);
+
+        // Trailing synthetic silence fed from 21,500ms to 21,860ms
+        for s in 1..=6 {
+            tracker.record_feed(960, 21_500 + s * 60, false);
+        }
+        // Finalize Line 2 at 22,000ms (500ms after last real audio byte at 21,500ms)
+        let (s2, e2) = tracker.resolve_clip_bounds(2.36, 1.5, 22_000, true);
+        assert_eq!(s2, 20_000, "Line 2 final start should be 20,000ms");
+        assert_eq!(e2, 21_500, "Line 2 final end should exclude synthetic trailing silence");
+    }
+
+    #[test]
+    fn test_sample_clock_tracker_back_to_back_sentences() {
+        let mut tracker = SampleClockTracker::new();
+
+        // Continuous audio from 0ms to 4000ms (8 chunks of 8000 samples = 500ms each)
+        // Character A speaks Sentence 1 from 0.0s .. 1.4s
+        // Character B speaks Sentence 2 from 1.5s .. 3.2s with no silence gap
+        for step in 1..=8 {
+            tracker.record_feed(8000, step * 500, true);
+        }
+
+        // At t = 2000ms, Sentence 1 (0.0s .. 1.4s) is finalized mid-stream while Sentence 2 (1.5s .. 2.0s) is already streaming
+        let (s1, e1) = tracker.resolve_clip_bounds(0.0, 1.4, 2000, true);
+        assert_eq!(s1, 0);
+        assert_eq!(e1, 1400);
+
+        // Immediately after at t = 2000ms, Sentence 2 partial (1.5s .. 2.0s) resolves its bounds:
+        let (s2_part, e2_part) = tracker.resolve_clip_bounds(1.5, 0.5, 2000, false);
+        assert_eq!(s2_part, 1500, "Sentence 2 must start at 1500ms even though 2000ms of audio was already fed");
+        assert_eq!(e2_part, 2000);
+
+        // At t = 4000ms, Sentence 2 finalizes (1.5s .. 3.2s)
+        let (s2_final, e2_final) = tracker.resolve_clip_bounds(1.5, 1.7, 4000, true);
+        assert_eq!(s2_final, 1500);
+        assert_eq!(e2_final, 3200);
     }
 }
