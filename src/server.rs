@@ -1,3 +1,4 @@
+use crate::utils::{download_file_blocking, prompt_auto_download};
 use anyhow::{anyhow, Result};
 use clap::ValueEnum;
 use std::{
@@ -99,6 +100,12 @@ pub fn resolve_model_path(model_arg: Option<&str>) -> Result<PathBuf> {
             }
         }
 
+        // If `m` looks like a model name rather than an explicit path, resolve to ~/.cache/whisper-models/ggml-<name>.bin
+        if !m.contains('/') && !m.contains('\\') {
+            let clean = m.trim_start_matches("ggml-").trim_end_matches(".bin");
+            return Ok(cache_dir.join(format!("ggml-{clean}.bin")));
+        }
+
         return Err(anyhow!(
             "Model '{}' not found directly or in {}",
             m,
@@ -122,6 +129,35 @@ pub fn resolve_model_path(model_arg: Option<&str>) -> Result<PathBuf> {
     }
 
     Ok(cache_dir.join("ggml-large-v3-turbo.bin"))
+}
+
+/// Checks if `model_path` exists locally; if missing, asks the user whether to auto-download it from HuggingFace (`ggerganov/whisper.cpp`).
+pub fn ensure_whisper_model_exists(model_path: &Path) -> Result<()> {
+    if model_path.exists() {
+        return Ok(());
+    }
+
+    let file_name = model_path
+        .file_name()
+        .and_then(|f| f.to_str())
+        .ok_or_else(|| anyhow!("Invalid model file path: {}", model_path.display()))?;
+
+    let parent_display = model_path
+        .parent()
+        .map_or_else(|| "~/.cache/whisper-models".to_string(), |p| p.display().to_string());
+
+    if !prompt_auto_download(file_name, &parent_display)? {
+        return Err(anyhow!(
+            "Whisper model file not found at '{}'. Download it or specify a path with -m.",
+            model_path.display()
+        ));
+    }
+
+    let url = format!(
+        "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/{file_name}"
+    );
+    download_file_blocking(&url, model_path, file_name)?;
+    Ok(())
 }
 
 pub fn build_server_args(config: &ServerConfig) -> Result<(PathBuf, Vec<String>)> {
@@ -223,13 +259,7 @@ pub fn is_port_listening(port: u16) -> bool {
 /// Run `whisper-server` in the foreground (`whisper --serve <preset>`).
 pub fn run_server_foreground(config: &ServerConfig) -> Result<()> {
     let (model_path, args) = build_server_args(config)?;
-
-    if !Path::new(&model_path).exists() {
-        return Err(anyhow!(
-            "Whisper model file not found at '{}'. Download it or specify a path with -m.",
-            model_path.display()
-        ));
-    }
+    ensure_whisper_model_exists(&model_path)?;
 
     eprintln!("╭──────────────────────────────────────────────────────────────╮");
     eprintln!("│ 🚀 Launching whisper-server ({:<8} preset)                │", config.preset.as_str());
@@ -266,12 +296,7 @@ impl ManagedServer {
         }
 
         let (model_path, args) = build_server_args(config)?;
-        if !model_path.exists() {
-            return Err(anyhow!(
-                "Whisper model file not found at '{}'. Download it or pass -m <PATH>.",
-                model_path.display()
-            ));
-        }
+        ensure_whisper_model_exists(&model_path)?;
 
         eprintln!(
             "🚀 Starting background whisper-server [{}] on port {}...",

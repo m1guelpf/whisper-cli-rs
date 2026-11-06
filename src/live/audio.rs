@@ -46,6 +46,22 @@ extern "C" {
     ) -> *mut c_void;
     pub fn wisp_applespeech_feed(handle: *mut c_void, samples: *const f32, count: usize, rate: f64);
     pub fn wisp_applespeech_stop(handle: *mut c_void);
+    pub fn wisp_parakeet_available() -> bool;
+    pub fn wisp_parakeet_start(
+        model_dir: *const c_char,
+        lang: *const c_char,
+        ctx: *mut c_void,
+        callback: extern "C" fn(*mut c_void, *const c_char, bool, f64, f64, f64),
+    ) -> *mut c_void;
+    pub fn wisp_parakeet_is_busy(handle: *mut c_void) -> bool;
+    pub fn wisp_parakeet_decode(
+        handle: *mut c_void,
+        samples: *const f32,
+        count: usize,
+        is_final: bool,
+        segment_start_sec: f64,
+    );
+    pub fn wisp_parakeet_stop(handle: *mut c_void);
 }
 
 #[cfg(target_os = "macos")]
@@ -157,12 +173,12 @@ impl Drop for TempWavFile {
     }
 }
 
-pub fn write_pcm16_wav(path: &Path, samples: &[f32], sample_rate: u32) -> Result<()> {
+pub fn encode_pcm16_wav_bytes(samples: &[f32], sample_rate: u32) -> Vec<u8> {
     let max_abs = samples
         .iter()
         .fold(0.0_f32, |acc, &s| acc.max(s.abs()));
 
-    // Gently normalize low-volume streams so Whisper still receives a clear signal
+    // Gently normalize low-volume streams so the model receives a clear signal
     let gain = if max_abs > 0.006 && max_abs < 0.35 {
         (0.70 / max_abs).min(8.0)
     } else {
@@ -173,29 +189,35 @@ pub fn write_pcm16_wav(path: &Path, samples: &[f32], sample_rate: u32) -> Result
     let riff_size = 36 + data_bytes;
     let byte_rate = sample_rate * 2;
 
-    let file = File::create(path)?;
-    let mut writer = BufWriter::new(file);
-
-    writer.write_all(b"RIFF")?;
-    writer.write_all(&riff_size.to_le_bytes())?;
-    writer.write_all(b"WAVE")?;
-    writer.write_all(b"fmt ")?;
-    writer.write_all(&16_u32.to_le_bytes())?; // PCM fmt chunk size
-    writer.write_all(&1_u16.to_le_bytes())?; // AudioFormat = 1 (PCM)
-    writer.write_all(&1_u16.to_le_bytes())?; // NumChannels = 1 (Mono)
-    writer.write_all(&sample_rate.to_le_bytes())?;
-    writer.write_all(&byte_rate.to_le_bytes())?;
-    writer.write_all(&2_u16.to_le_bytes())?; // BlockAlign = 2
-    writer.write_all(&16_u16.to_le_bytes())?; // BitsPerSample = 16
-    writer.write_all(b"data")?;
-    writer.write_all(&data_bytes.to_le_bytes())?;
+    let mut buf = Vec::with_capacity(44 + samples.len() * 2);
+    buf.extend_from_slice(b"RIFF");
+    buf.extend_from_slice(&riff_size.to_le_bytes());
+    buf.extend_from_slice(b"WAVE");
+    buf.extend_from_slice(b"fmt ");
+    buf.extend_from_slice(&16_u32.to_le_bytes()); // PCM fmt chunk size
+    buf.extend_from_slice(&1_u16.to_le_bytes()); // AudioFormat = 1 (PCM)
+    buf.extend_from_slice(&1_u16.to_le_bytes()); // NumChannels = 1 (Mono)
+    buf.extend_from_slice(&sample_rate.to_le_bytes());
+    buf.extend_from_slice(&byte_rate.to_le_bytes());
+    buf.extend_from_slice(&2_u16.to_le_bytes()); // BlockAlign = 2
+    buf.extend_from_slice(&16_u16.to_le_bytes()); // BitsPerSample = 16
+    buf.extend_from_slice(b"data");
+    buf.extend_from_slice(&data_bytes.to_le_bytes());
 
     for &sample in samples {
         let scaled = (sample * gain).clamp(-1.0, 1.0);
         let pcm16 = (scaled * 32767.0) as i16;
-        writer.write_all(&pcm16.to_le_bytes())?;
+        buf.extend_from_slice(&pcm16.to_le_bytes());
     }
 
+    buf
+}
+
+pub fn write_pcm16_wav(path: &Path, samples: &[f32], sample_rate: u32) -> Result<()> {
+    let bytes = encode_pcm16_wav_bytes(samples, sample_rate);
+    let file = File::create(path)?;
+    let mut writer = BufWriter::new(file);
+    writer.write_all(&bytes)?;
     writer.flush()?;
     Ok(())
 }

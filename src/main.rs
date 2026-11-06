@@ -6,14 +6,12 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 use anyhow::{anyhow, Result};
 use clap::{Parser, ValueEnum};
 use std::{env, path::Path, sync::Arc};
-use utils::write_to;
-
-mod utils;
+use whisper_cli::utils::write_to;
 
 use whisper_cli::{
     live::{run_audio_test, run_live_subtitles, LiveConfig},
     server::{resolve_model_path, run_server_foreground, ManagedServer, ServerConfig, ServerPreset},
-    CustomApiProvider, DeepgramProvider, GroqProvider, OpenAiProvider, Transcriber,
+    CustomApiProvider, DeepgramProvider, GroqProvider, OpenAiProvider, ParakeetProvider, Transcriber,
 };
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
@@ -24,6 +22,8 @@ pub enum ProviderKind {
     OpenAi,
     #[clap(name = "deepgram")]
     Deepgram,
+    #[clap(name = "parakeet")]
+    Parakeet,
     #[clap(name = "custom")]
     Custom,
 }
@@ -33,14 +33,14 @@ pub enum ProviderKind {
     author,
     version,
     about = "Transcribe audio files or live macOS system audio using modern Speech-to-Text APIs.",
-    long_about = "Generate a transcript of an audio file, launch a local whisper-server with tuned presets, or stream real-time subtitles from macOS system audio using Groq, OpenAI, Deepgram, or a custom OpenAI-compatible API endpoint (like whisper-server)."
+    long_about = "Generate a transcript of an audio file, launch a local whisper-server with tuned presets, or stream real-time subtitles from macOS system audio using NVIDIA Parakeet TDT (--parakeet), Apple Speech (--apple), Moonshine (--moonshine), Groq, OpenAI, Deepgram, or a custom OpenAI-compatible API endpoint."
 )]
 struct Args {
-    /// Speech-to-Text provider to use (groq, openai, deepgram, custom)
+    /// Speech-to-Text provider to use (groq, openai, deepgram, parakeet, custom)
     #[clap(short, long, value_enum, default_value = "groq")]
     provider: ProviderKind,
 
-    /// Name or path of the model to use (e.g. large-v3-turbo, medium, whisper-1, nova-3)
+    /// Name or path of the model to use (e.g. large-v3-turbo, whisper-1, nova-3, v3)
     #[clap(short, long)]
     model: Option<String>,
 
@@ -48,8 +48,8 @@ struct Args {
     #[clap(short = 'l', long)]
     lang: Option<String>,
 
-    /// Path to the audio file to transcribe (optional when using --live, --serve, --test-audio, --apple, or --moonshine)
-    #[clap(required_unless_present_any = ["live", "test_audio", "serve", "apple", "moonshine"])]
+    /// Path to the audio file to transcribe (optional when using --live, --serve, --test-audio, --apple, --moonshine, or --parakeet)
+    #[clap(required_unless_present_any = ["live", "test_audio", "serve", "apple", "moonshine", "parakeet"])]
     audio: Option<String>,
 
     /// Capture macOS system audio in real time and stream subtitles to the terminal
@@ -63,6 +63,10 @@ struct Args {
     /// Use ultra-fast Moonshine streaming speech recognition (<50ms latency, high accuracy)
     #[clap(long, default_value = "false")]
     moonshine: bool,
+
+    /// Use NVIDIA Parakeet TDT 0.6B v3 via MacParakeet (Apple Neural Engine CoreML, ultra-fast & accurate)
+    #[clap(long, default_value = "false")]
+    parakeet: bool,
 
     /// Wait for the speaker to finish their sentence before sending (uses Apple Neural Engine SoundAnalysis + vocal-band detection to ignore SFX/music)
     #[clap(long, default_value = "false")]
@@ -122,7 +126,9 @@ struct Args {
 }
 
 fn effective_provider(args: &Args) -> ProviderKind {
-    if args.preset.is_some() {
+    if args.parakeet {
+        ProviderKind::Parakeet
+    } else if args.preset.is_some() {
         ProviderKind::Custom
     } else {
         args.provider
@@ -147,6 +153,12 @@ fn provider_label(args: &Args) -> String {
         ProviderKind::Deepgram => {
             format!("Deepgram ({})", args.model.as_deref().unwrap_or("nova-3"))
         }
+        ProviderKind::Parakeet => {
+            format!(
+                "NVIDIA Parakeet TDT ({})",
+                args.model.as_deref().unwrap_or("0.6B v3")
+            )
+        }
         ProviderKind::Custom => {
             let url = effective_api_url(args);
             if let Some(preset) = args.preset {
@@ -164,6 +176,7 @@ fn create_transcriber(args: &Args) -> Result<Box<dyn Transcriber>> {
         ProviderKind::Groq => env::var("GROQ_API_KEY").ok(),
         ProviderKind::OpenAi => env::var("OPENAI_API_KEY").ok(),
         ProviderKind::Deepgram => env::var("DEEPGRAM_API_KEY").ok(),
+        ProviderKind::Parakeet => None,
         ProviderKind::Custom => env::var("CUSTOM_API_KEY").ok(),
     };
 
@@ -200,6 +213,7 @@ fn create_transcriber(args: &Args) -> Result<Box<dyn Transcriber>> {
                 args.lang.clone(),
             )))
         }
+        ProviderKind::Parakeet => Ok(Box::new(ParakeetProvider::new(args.model.clone())?)),
         ProviderKind::Custom => {
             let url = effective_api_url(args);
             Ok(Box::new(CustomApiProvider::new(
@@ -264,15 +278,26 @@ async fn handle_live(
 ) -> Result<()> {
     let is_apple = args.apple;
     let is_moonshine = args.moonshine;
+    let is_parakeet = args.parakeet || args.provider == ProviderKind::Parakeet;
 
     let chunk_secs = args.chunk_secs.unwrap_or_else(|| {
-        args.preset
-            .map_or(4.0, ServerPreset::recommended_chunk_secs)
+        if is_parakeet {
+            2.8
+        } else {
+            args.preset
+                .map_or(4.0, ServerPreset::recommended_chunk_secs)
+        }
     });
     let model_label = if is_apple {
         Some("Apple Neural Engine".to_string())
     } else if is_moonshine {
         Some("Moonshine v2 Streaming".to_string())
+    } else if is_parakeet {
+        Some(
+            args.model
+                .clone()
+                .unwrap_or_else(|| "Parakeet TDT 0.6B v3".to_string()),
+        )
     } else {
         resolve_model_path(args.model.as_deref())
             .ok()
@@ -284,10 +309,13 @@ async fn handle_live(
             "Apple Speech (Native ANE Streaming)".to_string()
         } else if is_moonshine {
             "Moonshine v2 (Ergodic Linear Attention)".to_string()
+        } else if is_parakeet {
+            "NVIDIA Parakeet TDT 0.6B v3 (CoreML ANE)".to_string()
         } else {
             provider_label(args)
         },
         model: model_label,
+        api_url: args.api_url.clone(),
         preset: args.preset,
         lang: args.lang.clone(),
         translate: args.translate,
@@ -298,6 +326,7 @@ async fn handle_live(
         sub_port: args.sub_port,
         apple: is_apple,
         moonshine: is_moonshine,
+        parakeet: is_parakeet,
     };
     let transcript = run_live_subtitles(Arc::new(transcriber), config).await?;
 
@@ -371,10 +400,18 @@ async fn main() -> Result<()> {
 
     let is_apple = args.apple;
     let is_moonshine = args.moonshine;
-    let is_live = args.live || args.apple || args.moonshine;
+    let is_parakeet = args.parakeet || args.provider == ProviderKind::Parakeet;
+    let has_existing_audio_file = args
+        .audio
+        .as_deref()
+        .map_or(false, |p| Path::new(p).exists());
+    let is_live = args.live
+        || args.apple
+        || args.moonshine
+        || (args.parakeet && !has_existing_audio_file);
 
     // If --preset was passed (e.g. with --live or file transcription), ensure whisper-server is running
-    let managed_server = if !is_apple && !is_moonshine && args.preset.is_some() {
+    let managed_server = if !is_apple && !is_moonshine && !is_parakeet && args.preset.is_some() {
         let preset = args.preset.unwrap();
         let cfg = ServerConfig {
             preset,
@@ -389,7 +426,7 @@ async fn main() -> Result<()> {
         None
     };
 
-    let transcriber: Box<dyn Transcriber> = if is_apple || is_moonshine {
+    let transcriber: Box<dyn Transcriber> = if is_apple || is_moonshine || is_parakeet {
         Box::new(CustomApiProvider::new(
             "http://localhost:8080".to_string(),
             None,

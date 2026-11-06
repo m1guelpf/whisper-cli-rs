@@ -2,7 +2,9 @@ pub mod audio;
 pub mod clock;
 pub mod config;
 pub mod engine_apple;
+// pub mod engine_lfm;
 pub mod engine_moonshine;
+pub mod engine_parakeet;
 pub mod engine_vad;
 pub mod hud;
 pub mod ramp;
@@ -14,7 +16,9 @@ pub use audio::*;
 pub use clock::*;
 pub use config::*;
 pub use engine_apple::*;
+// pub use engine_lfm::*;
 pub use engine_moonshine::*;
+pub use engine_parakeet::*;
 pub use engine_vad::*;
 pub use hud::*;
 pub use ramp::*;
@@ -144,6 +148,6 @@ mod tests {
         // At t = 4000ms, Sentence 2 finalizes (1.5s .. 3.2s)
         let (s2_final, e2_final) = tracker.resolve_clip_bounds(1.5, 1.7, 4000, true);
         assert_eq!(s2_final, 1500);
-        assert_eq!(e2_final, 3200);
+        assert_eq!(s2_final + 1700, e2_final);
     }
 }

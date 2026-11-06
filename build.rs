@@ -76,6 +76,14 @@ fn main() {
         println!("cargo:rustc-link-lib=static=macos_audio");
         println!("cargo:rustc-link-lib=static=WispSpeech");
 
+        let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
+        let lib_dir = manifest_dir.join("lib");
+        println!("cargo:rustc-link-search=native={}", lib_dir.display());
+        println!("cargo:rustc-link-lib=dylib=ParakeetBridge");
+        println!("cargo:rustc-link-arg=-Wl,-rpath,{}", lib_dir.display());
+        println!("cargo:rustc-link-arg=-Wl,-rpath,@loader_path");
+        println!("cargo:rustc-link-arg=-Wl,-rpath,@executable_path");
+
         if let Some(swift_lib) = toolchain_swift_lib_dir() {
             println!("cargo:rustc-link-search=native={swift_lib}");
         }
@@ -90,6 +98,8 @@ fn main() {
         println!("cargo:rustc-link-lib=framework=CoreGraphics");
         println!("cargo:rustc-link-lib=framework=Foundation");
         println!("cargo:rustc-link-lib=framework=Speech");
+        println!("cargo:rustc-link-lib=framework=CoreML");
+        println!("cargo:rustc-link-lib=framework=Accelerate");
 
         let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
         let plist_path = manifest_dir.join("src/Info.plist");

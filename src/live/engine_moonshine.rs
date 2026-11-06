@@ -16,12 +16,11 @@ use crate::{
         text_filter::is_hallucination,
     },
     transcript::Utternace,
-    utils::format_timestamp,
+    utils::{download_file_blocking, format_timestamp, prompt_auto_download},
 };
 #[cfg(feature = "moonshine")]
 use std::{
     collections::VecDeque,
-    fs::File,
     io::Write,
     path::Path,
     sync::Arc,
@@ -49,6 +48,7 @@ fn resolve_moonshine_model_info(lang_str: &str) -> (&'static str, moonshine_rs::
 fn ensure_moonshine_assets(
     cache_dir: &Path,
     lang_code: &str,
+    model_label: &str,
     arch: moonshine_rs::ModelArch,
     stdout_only: bool,
 ) -> Result<()> {
@@ -59,22 +59,30 @@ fn ensure_moonshine_assets(
         .as_array()
         .ok_or_else(|| anyhow!("Invalid Moonshine manifest structure"))?;
 
-    let client = reqwest::blocking::Client::builder()
-        .timeout(Duration::from_secs(180))
-        .build()?;
-
+    let mut missing = Vec::new();
     for f in files {
         let name = f["name"].as_str().unwrap_or_default();
         let url = f["url"].as_str().unwrap_or_default();
         let target = cache_dir.join(name);
         if !target.exists() {
-            if !stdout_only {
-                eprintln!("  📥 Downloading Moonshine asset: {name} ...");
-            }
-            let mut resp = client.get(url).send()?.error_for_status()?;
-            let mut out = File::create(&target)?;
-            resp.copy_to(&mut out)?;
+            missing.push((name.to_string(), url.to_string(), target));
         }
+    }
+
+    if missing.is_empty() {
+        return Ok(());
+    }
+
+    let display_name = format!("Moonshine {model_label} [{lang_code}]");
+    if !stdout_only && !prompt_auto_download(&display_name, &cache_dir.display().to_string())? {
+        return Err(anyhow!(
+            "Moonshine model '{display_name}' was not found locally at {}",
+            cache_dir.display()
+        ));
+    }
+
+    for (name, url, target) in missing {
+        download_file_blocking(&url, &target, &format!("Moonshine {name}"))?;
     }
     Ok(())
 }
@@ -146,7 +154,7 @@ pub async fn run_live_moonshine(config: LiveConfig) -> Result<Transcript> {
         eprintln!("  • Status   : Checking model assets...\n");
     }
 
-    ensure_moonshine_assets(&cache_dir, lang_code, arch, config.stdout_only)?;
+    ensure_moonshine_assets(&cache_dir, lang_code, model_label, arch, config.stdout_only)?;
 
     if !config.stdout_only {
         eprintln!("  ✅ Model assets verified. Starting session...\n");
