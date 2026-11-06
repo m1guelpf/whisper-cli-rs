@@ -282,7 +282,7 @@ async fn handle_live(
 
     let chunk_secs = args.chunk_secs.unwrap_or_else(|| {
         if is_parakeet {
-            2.8
+            10.0
         } else {
             args.preset
                 .map_or(4.0, ServerPreset::recommended_chunk_secs)

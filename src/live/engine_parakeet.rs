@@ -485,12 +485,12 @@ pub async fn run_live_parakeet(config: LiveConfig) -> Result<Transcript> {
                 if speaking {
                     let (
                         _max_chunk_samples,
-                        min_pause_split_samples,
-                        pause_silence_samples,
-                        soft_long_sentence_samples,
-                        breath_pause_samples,
+                        _min_pause_split_samples,
+                        _pause_silence_samples,
+                        _soft_long_sentence_samples,
+                        _breath_pause_samples,
                         short_phrase_min_samples,
-                        long_silence_samples,
+                        _long_silence_samples,
                         _,
                     ) = ramp.current_thresholds();
 
@@ -498,22 +498,33 @@ pub async fn run_live_parakeet(config: LiveConfig) -> Result<Transcript> {
                         (last_speech_instant.elapsed().as_secs_f32() * SAMPLE_RATE as f32) as usize;
                     let effective_silence = silence_samples.max(elapsed_silence_samples);
 
-                    let natural_pause_ready = speech_buffer.len() >= min_pause_split_samples
+                    // Tuned for media dialogue streaming to keep whole sentences intact:
+                    // - Normal sentence pause: >= 680ms of silence
+                    // - Flowing long sentence (>= 5.0s): >= 520ms of silence
+                    // - Very long runaway sentence (>= 8.5s): >= 380ms of silence
+                    let pause_thresh_secs = if speech_buffer.len() >= (8.5 * SAMPLE_RATE as f32) as usize {
+                        0.38
+                    } else if speech_buffer.len() >= (5.0 * SAMPLE_RATE as f32) as usize {
+                        0.52
+                    } else {
+                        0.68
+                    };
+                    let pause_silence_samples = (pause_thresh_secs * SAMPLE_RATE as f32) as usize;
+                    let min_phrase_samples = (1.2 * SAMPLE_RATE as f32) as usize;
+
+                    let natural_pause_ready = speech_buffer.len() >= min_phrase_samples
                         && effective_silence >= pause_silence_samples;
-                    let long_sentence_breath_ready = speech_mode
-                        && speech_buffer.len() >= soft_long_sentence_samples
-                        && effective_silence >= breath_pause_samples;
                     let short_phrase_ready = active_speech_samples >= short_phrase_min_samples
-                        && effective_silence >= long_silence_samples;
+                        && effective_silence >= (0.62 * SAMPLE_RATE as f32) as usize;
                     let dropped_noise = active_speech_samples < short_phrase_min_samples
-                        && effective_silence >= long_silence_samples;
+                        && effective_silence >= (0.62 * SAMPLE_RATE as f32) as usize;
 
                     if dropped_noise {
                         speech_buffer.clear();
                         speaking = false;
                         silence_samples = 0;
                         active_speech_samples = 0;
-                    } else if natural_pause_ready || long_sentence_breath_ready || short_phrase_ready {
+                    } else if natural_pause_ready || short_phrase_ready {
                         let chunk = std::mem::take(&mut speech_buffer);
                         speaking = false;
                         silence_samples = 0;
