@@ -212,126 +212,107 @@ fn create_transcriber(args: &Args) -> Result<Box<dyn Transcriber>> {
     }
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
-    let args = Args::parse();
-
-    if args.test_audio {
-        return run_audio_test().await;
-    }
-
-    if let Some(serve_preset) = args.serve {
-        let preset = args.preset.unwrap_or(serve_preset);
-        let cfg = ServerConfig {
-            preset,
-            model: args.model.clone(),
-            lang: args.lang.clone(),
-            port: args.port,
-            extra_args: args.server_args.clone(),
-            speech_mode: args.speech,
-        };
-        return run_server_foreground(&cfg);
-    }
-
-    let is_apple = args.apple;
-    let is_moonshine = args.moonshine;
-    let is_live = args.live || args.apple || args.moonshine;
-
-    // If --preset was passed (e.g. with --live or file transcription), ensure whisper-server is running
-    let _managed_server = if !is_apple && !is_moonshine && args.preset.is_some() {
-        let preset = args.preset.unwrap();
-        let cfg = ServerConfig {
-            preset,
-            model: args.model.clone(),
-            lang: args.lang.clone(),
-            port: args.port,
-            extra_args: args.server_args.clone(),
-            speech_mode: args.speech,
-        };
-        Some(ManagedServer::start(&cfg).await?)
-    } else {
-        None
+fn handle_serve(serve_preset: ServerPreset, args: &Args) -> Result<()> {
+    let preset = args.preset.unwrap_or(serve_preset);
+    let cfg = ServerConfig {
+        preset,
+        model: args.model.clone(),
+        lang: args.lang.clone(),
+        port: args.port,
+        extra_args: args.server_args.clone(),
+        speech_mode: args.speech,
     };
+    run_server_foreground(&cfg)
+}
 
-    let transcriber: Box<dyn Transcriber> = if is_apple || is_moonshine {
-        Box::new(CustomApiProvider::new(
-            "http://localhost:8080".to_string(),
-            None,
-            None,
-            args.lang.clone(),
-        ))
-    } else {
-        create_transcriber(&args)?
-    };
-
-    if is_live {
-        let chunk_secs = args.chunk_secs.unwrap_or_else(|| {
-            args.preset
-                .map_or(4.0, ServerPreset::recommended_chunk_secs)
-        });
-        let model_label = if is_apple {
-            Some("Apple Neural Engine".to_string())
-        } else if is_moonshine {
-            Some("Moonshine v2 Streaming".to_string())
-        } else {
-            resolve_model_path(args.model.as_deref())
-                .ok()
-                .and_then(|p| p.file_name().map(|f| f.to_string_lossy().to_string()))
-                .or_else(|| args.model.clone())
-        };
-        let config = LiveConfig {
-            provider_label: if is_apple {
-                "Apple Speech (Native ANE Streaming)".to_string()
-            } else if is_moonshine {
-                "Moonshine v2 (Ergodic Linear Attention)".to_string()
-            } else {
-                provider_label(&args)
-            },
-            model: model_label,
-            preset: args.preset,
-            lang: args.lang.clone(),
-            translate: args.translate,
-            karaoke: args.karaoke,
-            stdout_only: args.stdout,
-            chunk_secs,
-            speech_mode: args.speech,
-            sub_port: args.sub_port,
-            apple: is_apple,
-            moonshine: is_moonshine,
-        };
-        let transcript = run_live_subtitles(Arc::new(transcriber), config).await?;
-
-        if let Some(output_arg) = &args.audio {
-            if !args.no_files && !args.stdout && !transcript.utterances.is_empty() {
-                let out_path = Path::new(output_arg);
-                let file_name = out_path
-                    .file_name()
-                    .ok_or_else(|| anyhow!("Invalid output path"))?
-                    .to_str()
-                    .ok_or_else(|| anyhow!("Non-UTF8 filename"))?;
-
-                write_to(
-                    out_path.with_file_name(format!("{file_name}.txt")),
-                    &transcript.as_text(),
-                );
-                write_to(
-                    out_path.with_file_name(format!("{file_name}.vtt")),
-                    &transcript.as_vtt(),
-                );
-                write_to(
-                    out_path.with_file_name(format!("{file_name}.srt")),
-                    &transcript.as_srt(),
-                );
-                eprintln!("Saved live session transcript to {file_name}.{{txt,vtt,srt}}");
-            }
-        }
+fn save_live_transcript_files(
+    output_arg: &str,
+    transcript: &whisper_cli::Transcript,
+    no_files: bool,
+    stdout: bool,
+) -> Result<()> {
+    if no_files || stdout || transcript.utterances.is_empty() {
         return Ok(());
     }
+    let out_path = Path::new(output_arg);
+    let file_name = out_path
+        .file_name()
+        .ok_or_else(|| anyhow!("Invalid output path"))?
+        .to_str()
+        .ok_or_else(|| anyhow!("Non-UTF8 filename"))?;
 
-    let audio_str = args
-        .audio
-        .as_deref()
-        .ok_or_else(|| anyhow!("Audio file path is required unless --live or --serve is specified."))?;
+    write_to(
+        out_path.with_file_name(format!("{file_name}.txt")),
+        &transcript.as_text(),
+    );
+    write_to(
+        out_path.with_file_name(format!("{file_name}.vtt")),
+        &transcript.as_vtt(),
+    );
+    write_to(
+        out_path.with_file_name(format!("{file_name}.srt")),
+        &transcript.as_srt(),
+    );
+    eprintln!("Saved live session transcript to {file_name}.{{txt,vtt,srt}}");
+    Ok(())
+}
+
+async fn handle_live(
+    args: &Args,
+    transcriber: Box<dyn Transcriber>,
+    _managed_server: Option<ManagedServer>,
+) -> Result<()> {
+    let is_apple = args.apple;
+    let is_moonshine = args.moonshine;
+
+    let chunk_secs = args.chunk_secs.unwrap_or_else(|| {
+        args.preset
+            .map_or(4.0, ServerPreset::recommended_chunk_secs)
+    });
+    let model_label = if is_apple {
+        Some("Apple Neural Engine".to_string())
+    } else if is_moonshine {
+        Some("Moonshine v2 Streaming".to_string())
+    } else {
+        resolve_model_path(args.model.as_deref())
+            .ok()
+            .and_then(|p| p.file_name().map(|f| f.to_string_lossy().to_string()))
+            .or_else(|| args.model.clone())
+    };
+    let config = LiveConfig {
+        provider_label: if is_apple {
+            "Apple Speech (Native ANE Streaming)".to_string()
+        } else if is_moonshine {
+            "Moonshine v2 (Ergodic Linear Attention)".to_string()
+        } else {
+            provider_label(args)
+        },
+        model: model_label,
+        preset: args.preset,
+        lang: args.lang.clone(),
+        translate: args.translate,
+        karaoke: args.karaoke,
+        stdout_only: args.stdout,
+        chunk_secs,
+        speech_mode: args.speech,
+        sub_port: args.sub_port,
+        apple: is_apple,
+        moonshine: is_moonshine,
+    };
+    let transcript = run_live_subtitles(Arc::new(transcriber), config).await?;
+
+    if let Some(output_arg) = &args.audio {
+        save_live_transcript_files(output_arg, &transcript, args.no_files, args.stdout)?;
+    }
+    Ok(())
+}
+
+async fn handle_file_transcription(
+    audio_str: &str,
+    args: &Args,
+    transcriber: Box<dyn Transcriber>,
+    _managed_server: Option<ManagedServer>,
+) -> Result<()> {
     let audio = Path::new(audio_str);
     let file_name = audio
         .file_name()
@@ -341,8 +322,7 @@ async fn main() -> Result<()> {
 
     if !audio.exists() {
         return Err(anyhow!(
-            "The provided audio file '{}' does not exist.",
-            audio_str
+            "The provided audio file '{audio_str}' does not exist."
         ));
     }
 
@@ -375,4 +355,59 @@ async fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    let args = Args::parse();
+
+    if args.test_audio {
+        return run_audio_test().await;
+    }
+
+    if let Some(serve_preset) = args.serve {
+        return handle_serve(serve_preset, &args);
+    }
+
+    let is_apple = args.apple;
+    let is_moonshine = args.moonshine;
+    let is_live = args.live || args.apple || args.moonshine;
+
+    // If --preset was passed (e.g. with --live or file transcription), ensure whisper-server is running
+    let managed_server = if !is_apple && !is_moonshine && args.preset.is_some() {
+        let preset = args.preset.unwrap();
+        let cfg = ServerConfig {
+            preset,
+            model: args.model.clone(),
+            lang: args.lang.clone(),
+            port: args.port,
+            extra_args: args.server_args.clone(),
+            speech_mode: args.speech,
+        };
+        Some(ManagedServer::start(&cfg).await?)
+    } else {
+        None
+    };
+
+    let transcriber: Box<dyn Transcriber> = if is_apple || is_moonshine {
+        Box::new(CustomApiProvider::new(
+            "http://localhost:8080".to_string(),
+            None,
+            None,
+            args.lang.clone(),
+        ))
+    } else {
+        create_transcriber(&args)?
+    };
+
+    if is_live {
+        return handle_live(&args, transcriber, managed_server).await;
+    }
+
+    let audio_str = args
+        .audio
+        .as_deref()
+        .ok_or_else(|| anyhow!("Audio file path is required unless --live or --serve is specified."))?;
+
+    handle_file_transcription(audio_str, &args, transcriber, managed_server).await
 }

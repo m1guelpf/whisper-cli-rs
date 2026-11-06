@@ -1,0 +1,11 @@
+project,test_name,phase,iterations,mean_ms,median_ms,p95_ms,p99_ms,min_ms,max_ms
+whisper-cli,sse_initial_history_25_cues_tcp,before,50,0.2627,0.2524,0.3557,0.5454,0.1823,0.5454
+whisper-cli,sse_live_partial_token_tcp,before,200,0.0343,0.0343,0.0417,0.0667,0.0241,0.2486
+whisper-cli,apple_cb_to_sse_broadcast,before,100,2.5908,2.2985,3.4247,3.4453,2.0967,3.4453
+whisper-cli,moonshine_audio_to_poll_wait,before,100,25.5095,25.7820,48.1560,50.0000,0.6420,50.0000
+whisper-cli,sample_clock_resolve_bounds_1000_chunks,before,200,0.0014,0.0014,0.0015,0.0015,0.0014,0.0015
+whisper-cli,sse_initial_history_25_cues_tcp,after,50,0.1971,0.1913,0.2717,0.4400,0.1325,0.4400
+whisper-cli,sse_live_partial_token_tcp,after,200,0.0335,0.0320,0.0385,0.0823,0.0258,0.1539
+whisper-cli,apple_cb_to_sse_broadcast,after,100,0.0016,0.0015,0.0030,0.0059,0.0014,0.0059
+whisper-cli,moonshine_audio_to_poll_wait,after,100,0.0120,0.0120,0.0120,0.0120,0.0120,0.0120
+whisper-cli,sample_clock_resolve_bounds_1000_chunks,after,200,0.0012,0.0012,0.0012,0.0012,0.0012,0.0012

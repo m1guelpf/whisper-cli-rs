@@ -1,0 +1,12 @@
+project,test_name,iterations,before_mean_ms,after_mean_ms,before_median_ms,after_median_ms,before_p95_ms,after_p95_ms,saved_mean_ms,speedup_x,action_taken
+whisper-cli,sse_initial_history_25_cues_tcp,50,0.2627,0.1971,0.2524,0.1913,0.3557,0.2717,0.0656,1.33,Enabled TCP_NODELAY and coalesced HTTP header + 25 history cues into a single socket write
+whisper-cli,sse_live_partial_token_tcp,200,0.0343,0.0335,0.0343,0.0320,0.0417,0.0385,0.0008,1.02,Already <0.04ms on macOS loopback; kept TCP_NODELAY enabled for multi-packet bursts
+whisper-cli,apple_cb_to_sse_broadcast,100,2.5908,0.0016,2.2985,0.0015,3.4247,0.0030,2.5892,1619.25,Broadcast SSE JSON directly inside apple_speech_callback instead of waiting for Tokio HUD/audio select loop
+whisper-cli,moonshine_audio_to_poll_wait,100,25.5095,0.0120,25.7820,0.0120,48.1560,0.0120,25.4975,2125.79,Trigger stream.poll() immediately on audio packet arrival instead of waiting for 50ms HUD interval
+whisper-cli,sample_clock_resolve_bounds_1000_chunks,200,0.0014,0.0012,0.0014,0.0012,0.0015,0.0012,0.0002,1.17,Already 0.0014ms (<<1ms); no changes needed
+whisper-cli-sub-injector,bg_add_cue_to_history_partial_1500,100,2.0420,0.0305,1.9101,0.0011,2.3838,0.0074,2.0115,66.95,Debounced chrome.storage.local.set for partial tokens (immediate save on isFinal)
+whisper-cli-sub-injector,bg_sync_video_cue_timing_partial_1500,100,1.8306,0.0303,1.8185,0.0013,2.0467,0.0067,1.8003,60.42,Reverse-indexed history lookup from tail + debounced storage writes on partial timing sync
+whisper-cli-sub-injector,bg_cue_to_content_delivery_25_tabs,100,2.7003,0.0317,2.6823,0.0259,2.9264,0.0545,2.6686,85.18,Broadcast NEW_SUBTITLE before history storage via persistent chrome.runtime.Port instead of chrome.tabs.query({})
+whisper-cli-sub-injector,content_render_subtitle_stack_partial,200,0.0951,0.0028,0.0914,0.0010,0.0987,0.0022,0.0923,33.96,In-place DOM textContent fast-path when active cue IDs and settings match
+whisper-cli-sub-injector,content_overlay_show_cue_partial_1500,150,0.1161,0.0136,0.1030,0.0037,0.1557,0.0255,0.1025,8.54,Render DOM before background sync + reverse timeline lookup + skip getBoundingClientRect on partial text updates
+whisper-cli-sub-injector,content_estimate_cue_timing,200,0.0003,0.0003,0.0003,0.0003,0.0003,0.0003,0.0000,1.00,Already 0.0003ms (<<1ms); no changes needed
