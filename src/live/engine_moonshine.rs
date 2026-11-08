@@ -136,7 +136,13 @@ pub async fn run_live_moonshine(config: LiveConfig) -> Result<Transcript> {
         .join(lang_code);
     std::fs::create_dir_all(&cache_dir)?;
 
-    if !config.stdout_only {
+    if config.silent {
+        if config.sub_port > 0 {
+            eprintln!("⚡ [whisper] Headless Moonshine on http://127.0.0.1:{}/events (Ctrl+C to stop)", config.sub_port);
+        } else {
+            eprintln!("⚡ [whisper] Headless Moonshine active (Ctrl+C to stop)");
+        }
+    } else if !config.stdout_only {
         eprintln!("╭──────────────────────────────────────────────────────────────╮");
         eprintln!("│ ⚡ Moonshine v2 Speech Recognition (Ultra-Fast Streaming)    │");
         eprintln!("╰──────────────────────────────────────────────────────────────╯");
@@ -154,9 +160,9 @@ pub async fn run_live_moonshine(config: LiveConfig) -> Result<Transcript> {
         eprintln!("  • Status   : Checking model assets...\n");
     }
 
-    ensure_moonshine_assets(&cache_dir, lang_code, model_label, arch, config.stdout_only)?;
+    ensure_moonshine_assets(&cache_dir, lang_code, model_label, arch, config.stdout_only || config.silent)?;
 
-    if !config.stdout_only {
+    if !config.stdout_only && !config.silent {
         eprintln!("  ✅ Model assets verified. Starting session...\n");
     }
 
@@ -300,7 +306,9 @@ pub async fn run_live_moonshine(config: LiveConfig) -> Result<Transcript> {
                                 text: text.to_string(),
                             });
 
-                            if config.stdout_only {
+                            if config.silent {
+                                // Headless: broadcast only via SSE
+                            } else if config.stdout_only {
                                 println!("{text}");
                                 let _ = std::io::stdout().flush();
                             } else {
@@ -311,14 +319,16 @@ pub async fn run_live_moonshine(config: LiveConfig) -> Result<Transcript> {
                     } else if !committed_ids.contains(&line.id) {
                         if text != last_preview_text {
                             last_preview_text = text.to_string();
-                            current_preview = Some(format!("[{short_ts}] {text}"));
+                            if !config.silent {
+                                current_preview = Some(format!("[{short_ts}] {text}"));
+                            }
                             let _ = sub_broadcast_tx.send(cue_val.to_string());
                         }
                     }
                 }
             }
 
-            if !config.stdout_only {
+            if !config.stdout_only && !config.silent {
                 render_moonshine_hud_line(
                     tick,
                     current_rms,
@@ -331,7 +341,7 @@ pub async fn run_live_moonshine(config: LiveConfig) -> Result<Transcript> {
     }
 
     let _ = stream.finalize();
-    if !config.stdout_only {
+    if !config.stdout_only && !config.silent {
         eprintln!("\n👋 Stopping Moonshine streaming...");
     }
 

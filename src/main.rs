@@ -120,6 +120,10 @@ struct Args {
     #[clap(short = 's', long, default_value = "false")]
     stdout: bool,
 
+    /// Run silently in headless mode (disables HUD, animations, and terminal output for minimum CPU usage)
+    #[clap(short = 'q', long, alias = "headless", default_value = "false")]
+    silent: bool,
+
     /// Skip writing .txt, .vtt, and .srt files to disk
     #[clap(long, default_value = "false")]
     no_files: bool,
@@ -321,6 +325,7 @@ async fn handle_live(
         translate: args.translate,
         karaoke: args.karaoke,
         stdout_only: args.stdout,
+        silent: args.silent,
         chunk_secs,
         speech_mode: args.speech,
         sub_port: args.sub_port,

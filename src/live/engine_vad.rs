@@ -40,6 +40,14 @@ pub async fn run_live_subtitles(
 
 #[cfg(target_os = "macos")]
 fn print_vad_banner(config: &LiveConfig, is_realtime: bool) {
+    if config.silent {
+        if config.sub_port > 0 {
+            eprintln!("🎧 [whisper] Headless stream on http://127.0.0.1:{}/events (Ctrl+C to stop)", config.sub_port);
+        } else {
+            eprintln!("🎧 [whisper] Headless stream active (Ctrl+C to stop)");
+        }
+        return;
+    }
     if config.stdout_only {
         return;
     }
@@ -82,6 +90,7 @@ fn spawn_transcription_worker(
     sub_history: Arc<std::sync::Mutex<VecDeque<serde_json::Value>>>,
     session_start: Instant,
     stdout_only: bool,
+    silent: bool,
     translate: bool,
     karaoke: bool,
 ) -> (
@@ -123,7 +132,9 @@ fn spawn_transcription_worker(
                             let ts = format_timestamp(seg.start_offset_ms / 10, false, ".");
                             let short_ts = ts.split('.').next().unwrap_or(&ts);
 
-                            if stdout_only {
+                            if silent {
+                                // Headless: broadcast only via SSE
+                            } else if stdout_only {
                                 println!("{subtitle}");
                                 let _ = std::io::stdout().flush();
                             } else {
@@ -165,7 +176,7 @@ fn spawn_transcription_worker(
                         }
                     }
                     Err(err) => {
-                        if !stdout_only {
+                        if !stdout_only && !silent {
                             eprint!("\r\x1b[2K");
                             eprintln!("\x1b[33m⚠️  Transcription error: {err}\x1b[0m");
                         }
@@ -218,6 +229,7 @@ pub async fn run_live_subtitles(
         Arc::clone(&sub_history),
         session_start,
         config.stdout_only,
+        config.silent,
         config.translate,
         config.karaoke,
     );
@@ -235,6 +247,7 @@ pub async fn run_live_subtitles(
     let vad_threshold: f32 = 0.0045;
 
     let stdout_only = config.stdout_only;
+    let silent = config.silent;
     let speech_mode = config.speech_mode;
 
     let mut pre_roll: VecDeque<f32> = VecDeque::with_capacity(pre_roll_capacity + 2048);
@@ -252,12 +265,16 @@ pub async fn run_live_subtitles(
     let mut tick: usize = 0;
     let mut last_packet_instant = Instant::now();
     let mut last_speech_instant = Instant::now();
-    let mut ui_interval = tokio::time::interval(Duration::from_millis(80));
+    let mut ui_interval = if silent {
+        tokio::time::interval(Duration::from_secs(3600))
+    } else {
+        tokio::time::interval(Duration::from_millis(80))
+    };
 
     loop {
         tokio::select! {
             _ = tokio::signal::ctrl_c() => {
-                if !stdout_only {
+                if !stdout_only && !silent {
                     eprint!("\r\x1b[2K");
                     eprintln!("\n👋 Stopping live audio capture...");
                 }
@@ -340,7 +357,7 @@ pub async fn run_live_subtitles(
                     }
                 }
 
-                if !stdout_only {
+                if !stdout_only && !silent {
                     tick = tick.wrapping_add(1);
                     let bytes = unsafe { whisper_macos_audio_bytes_received() };
                     let pkts = unsafe { whisper_macos_audio_packets_received() };

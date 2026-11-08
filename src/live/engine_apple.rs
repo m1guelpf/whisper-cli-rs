@@ -161,6 +161,14 @@ pub fn map_locale_identifier(lang_str: &str) -> &'static str {
 }
 
 fn print_apple_banner(config: &LiveConfig, lang_str: &str) {
+    if config.silent {
+        if config.sub_port > 0 {
+            eprintln!("⚡ [whisper] Headless stream on http://127.0.0.1:{}/events (Ctrl+C to stop)", config.sub_port);
+        } else {
+            eprintln!("⚡ [whisper] Headless stream active (Ctrl+C to stop)");
+        }
+        return;
+    }
     if !config.stdout_only {
         eprintln!("╭──────────────────────────────────────────────────────────────╮");
         eprintln!("│ ⚡ macOS Apple Speech Recognition (Neural Engine Streaming)  │");
@@ -272,7 +280,11 @@ pub async fn run_live_apple_speech(config: LiveConfig) -> Result<Transcript> {
     // Start ScreenCaptureKit system audio feed
     let (_audio_stream, mut audio_rx) = MacOsAudioStream::start()?;
 
-    let mut hud_interval = tokio::time::interval(std::time::Duration::from_millis(60));
+    let mut hud_interval = if config.silent {
+        tokio::time::interval(std::time::Duration::from_secs(3600))
+    } else {
+        tokio::time::interval(std::time::Duration::from_millis(60))
+    };
     let mut tick: usize = 0;
     let mut recent_peak: f32 = 0.0;
     let mut current_rms: f32 = 0.0;
@@ -294,7 +306,9 @@ pub async fn run_live_apple_speech(config: LiveConfig) -> Result<Transcript> {
             Some(event) = event_rx.recv() => {
                 match event {
                     SpeechEvent::Partial { preview, cue_val } => {
-                        current_preview = Some(preview);
+                        if !config.silent {
+                            current_preview = Some(preview);
+                        }
                         pending_final = Some(cue_val);
                     }
                     SpeechEvent::Final { text, short_ts, start_ms, duration_ms, cue_val: _ } => {
@@ -307,7 +321,9 @@ pub async fn run_live_apple_speech(config: LiveConfig) -> Result<Transcript> {
                             text: text.clone(),
                         });
 
-                        if config.stdout_only {
+                        if config.silent {
+                            // Headless mode: no terminal emission
+                        } else if config.stdout_only {
                             println!("{text}");
                             let _ = std::io::stdout().flush();
                         } else {
@@ -386,7 +402,7 @@ pub async fn run_live_apple_speech(config: LiveConfig) -> Result<Transcript> {
                     }
                 }
 
-                if !config.stdout_only {
+                if !config.stdout_only && !config.silent {
                     render_apple_hud_line(
                         tick,
                         current_rms,
@@ -419,7 +435,7 @@ pub async fn run_live_apple_speech(config: LiveConfig) -> Result<Transcript> {
         }
     }
 
-    if !config.stdout_only {
+    if !config.stdout_only && !config.silent {
         eprintln!("\n👋 Stopping Apple Speech live capture...");
     }
 

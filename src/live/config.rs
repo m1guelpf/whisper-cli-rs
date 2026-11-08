@@ -9,6 +9,7 @@ pub struct LiveConfig {
     pub translate: bool,
     pub karaoke: bool,
     pub stdout_only: bool,
+    pub silent: bool,
     pub chunk_secs: f32,
     pub speech_mode: bool,
     pub sub_port: u16,

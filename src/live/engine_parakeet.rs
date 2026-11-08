@@ -278,6 +278,14 @@ pub extern "C" fn parakeet_speech_callback(
 }
 
 fn print_parakeet_banner(config: &LiveConfig, lang_str: &str) {
+    if config.silent {
+        if config.sub_port > 0 {
+            eprintln!("🦜 [whisper] Headless stream on http://127.0.0.1:{}/events (Ctrl+C to stop)", config.sub_port);
+        } else {
+            eprintln!("🦜 [whisper] Headless stream active (Ctrl+C to stop)");
+        }
+        return;
+    }
     if !config.stdout_only {
         eprintln!("╭──────────────────────────────────────────────────────────────╮");
         eprintln!("│ 🦜 NVIDIA Parakeet TDT 0.6B (Native Apple Neural Engine)     │");
@@ -373,7 +381,7 @@ pub async fn run_live_parakeet(config: LiveConfig) -> Result<Transcript> {
         ));
     }
 
-    if !config.stdout_only {
+    if !config.stdout_only && !config.silent {
         eprintln!("  • Ready!   : Streaming live... (Press Ctrl+C to stop)\n");
     }
 
@@ -386,6 +394,7 @@ pub async fn run_live_parakeet(config: LiveConfig) -> Result<Transcript> {
     let pre_roll_capacity = (0.28 * SAMPLE_RATE as f32) as usize;
     let vad_threshold: f32 = 0.0045;
     let stdout_only = config.stdout_only;
+    let silent = config.silent;
     let speech_mode = config.speech_mode;
 
     let mut pre_roll: VecDeque<f32> = VecDeque::with_capacity(pre_roll_capacity + 2048);
@@ -406,7 +415,11 @@ pub async fn run_live_parakeet(config: LiveConfig) -> Result<Transcript> {
     let mut last_partial_instant = Instant::now();
     let mut last_partial_samples: usize = 0;
     let mut current_preview: Option<String> = None;
-    let mut ui_interval = tokio::time::interval(Duration::from_millis(80));
+    let mut ui_interval = if silent {
+        tokio::time::interval(Duration::from_secs(3600))
+    } else {
+        tokio::time::interval(Duration::from_millis(80))
+    };
 
     let ctrl_c = tokio::signal::ctrl_c();
     tokio::pin!(ctrl_c);
@@ -434,7 +447,9 @@ pub async fn run_live_parakeet(config: LiveConfig) -> Result<Transcript> {
             Some(event) = event_rx.recv() => {
                 match event {
                     ParakeetSpeechEvent::Partial { preview } => {
-                        current_preview = Some(preview);
+                        if !silent {
+                            current_preview = Some(preview);
+                        }
                     }
                     ParakeetSpeechEvent::Final { text, short_ts, start_ms, duration_ms, decode_ms } => {
                         current_preview = None;
@@ -445,7 +460,9 @@ pub async fn run_live_parakeet(config: LiveConfig) -> Result<Transcript> {
                             text: text.clone(),
                         });
 
-                        if stdout_only {
+                        if silent {
+                            // Headless mode: no terminal emission (browser injector receives subtitles via SSE)
+                        } else if stdout_only {
                             println!("{text}");
                             let _ = std::io::stdout().flush();
                         } else {
@@ -546,7 +563,7 @@ pub async fn run_live_parakeet(config: LiveConfig) -> Result<Transcript> {
                     }
                 }
 
-                if !stdout_only {
+                if !stdout_only && !silent {
                     tick = tick.wrapping_add(1);
                     let bytes = unsafe { whisper_macos_audio_bytes_received() };
                     let pkts = unsafe { whisper_macos_audio_packets_received() };
@@ -702,7 +719,7 @@ pub async fn run_live_parakeet(config: LiveConfig) -> Result<Transcript> {
         }
     }
 
-    if !stdout_only {
+    if !stdout_only && !silent {
         eprintln!("\n👋 Stopping Parakeet native streaming capture...");
     }
 
