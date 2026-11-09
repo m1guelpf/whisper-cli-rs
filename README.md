@@ -1,339 +1,337 @@
-
 # whisper-cli
 
-A high-performance command-line tool in Rust for real-time speech recognition, live system audio captioning, and batch audio transcription.
+A command-line tool in Rust for audio file transcription and real-time macOS system audio subtitles.
 
-Supports on-device streaming engines (Apple Neural Engine via --apple, for cross platform, Moonshine v2 via --moonshine), cloud Speech-to-Text APIs (Groq, OpenAI, Deepgram), and self-hosted OpenAI-compatible endpoints (whisper-server, Faster-Whisper, Ollama, LocalAI, vLLM). 
-
-### macOS features
-
-near Zero-latency (100-200ms) macOS system audio loopback via `ScreenCaptureKit` (no blackhole needed) with live HTTP/SSE broadcasting to browser extensions for real-time video subtitles, outputting transcripts directly to the terminal or exporting to `.txt`, `.vtt`, and `.srt` formats.
-
---- 
-
-### Recommended companion Chrome & Firefox extension: 
-**https://github.com/aramrw/whisper-cli-sub-injector**
-
-   <img width="377.5" height="172.5" alt="st_overlayd" src="https://github.com/user-attachments/assets/5be1d420-0bcf-4af0-91bd-61351834a639" />
+Works with on-device engines (Apple Speech, NVIDIA Parakeet CoreML, whisper.cpp, Moonshine) as well as cloud Speech-to-Text APIs (Groq, OpenAI, Deepgram) and self-hosted OpenAI-compatible endpoints.
 
 ---
 
-> **--live** flag cli example
+## Table of Contents
 
-```
-~/Programming/whisper-cli> whisper --live --speech --preset fast -l es -m large-v3-turbo-q5_0
-🚀 Starting background whisper-server [fast] on port 8080...
-   Command: whisper-server -m /Users/aramsamifanni/.cache/whisper-models/ggml-large-v3-turbo-q5_0.bin --port 8080 -t 8 -fa -mc 0 -sns -l es -nth 0.45 -ac 768 -nf -bo 1 -bs 1
-✅ whisper-server ready in 0.5s!
-
-╭──────────────────────────────────────────────────────────────╮
-│ 🎧 macOS Live System Audio Subtitles (ScreenCaptureKit)      │
-╰──────────────────────────────────────────────────────────────╯
-  • Provider : Custom (http://localhost:8080 • fast preset)
-  • Model    : ggml-large-v3-turbo-q5_0.bin
-  • Subtitles: http://127.0.0.1:8989/events (Browser Injector)
-  • Language : es
-  • Mode     : Smart Speech VAD (waits for sentence end up to 15s, filters SFX/music) (Press Ctrl+C to stop)
-
-[00:44]  Gracias. ¿Qué tal si mejor yo se lo llevo a Kafka?
-[00:48]  No, no hay problema. Yo mismo se lo llevaré.
-[01:06]  Parece que ya lo aprobaron. Pero este será su último año, ¿no? Ah.
-[01:11]  Así es su última vez, aunque ojalá le dieran una oportunidad.
-[01:15]  Se ha esforzado con empeño durante mucho tiempo.
-[01:29]  ambos pasamos el primer examen
-[01:36]  ¿De verdad? ¡Oye!
-[01:38]  Oye, ¿pero por qué te ves así? Jejeje
-[01:41]  ¿Te despertaste de malas, Ichikawa? ¡Pues solo mírate la cara! ¿En serio eres consciente de tu situación actual? Ay, lo siento mucho, es que... A veces se me sale sin que me dé cuenta. 
-```
+1. [Installation](#installation)
+2. [Quick Start](#quick-start)
+3. [Models and Downloads](#models-and-downloads)
+4. [Transcribing Audio Files](#transcribing-audio-files)
+5. [Live System Audio Subtitles (macOS)](#live-system-audio-subtitles-macos)
+6. [Browser Extension Subtitles](#browser-extension-subtitles)
+7. [Local Server Presets (whisper-cpp)](#local-server-presets-whisper-cpp)
+8. [API Key Setup](#api-key-setup)
+9. [CLI Reference](#cli-reference)
 
 ---
 
-## Installation & Build
+## Installation
 
 Ensure you have Rust installed ([rustup.rs](https://rustup.rs/)).
 
 ```bash
-git clone https://github.com/aramrw/whisper-cli && cd whisper-cli
+git clone https://github.com/aramrw/whisper-cli.git
+cd whisper-cli
 
-# Standard lean build (Apple Neural Engine + Whisper + Cloud providers):
-cargo build --release
-
-# Optional: with Moonshine v2 cross-platform ONNX engine:
-cargo build --release --features moonshine
+# Install binary to ~/.cargo/bin:
+cargo install --path .
 ```
 
-Install binary system-wide:
+To include the optional Moonshine ONNX streaming engine:
 ```bash
-cargo install --path .
-# Or with moonshine:
 cargo install --path . --features moonshine
 ```
 
 ---
 
-## Setting Up a Local Server (`whisper-cpp` on macOS)
+## Quick Start
 
-To run transcriptions 100% locally with Apple Silicon Metal GPU acceleration without sending data to cloud APIs:
+### 1. Transcribe an Audio File
+```bash
+# Uses Groq cloud by default (requires GROQ_API_KEY environment variable)
+whisper audio.mp3
+
+# Or transcribe locally using Parakeet (macOS Apple Silicon)
+whisper -p parakeet audio.mp3
+```
+By default, this writes `.txt`, `.srt`, and `.vtt` subtitle files in the same directory as the audio file.
+
+### 2. Live macOS System Audio Subtitles
+Capture system audio in real time (from YouTube, Crunchyroll, meetings, or any app) without virtual audio cables:
+
+```bash
+# Using Apple Speech on Apple Neural Engine (no model download needed):
+whisper --apple -l en
+
+# Or using local Whisper with automatic model download:
+whisper --live --preset live -l en
+```
+
+> **macOS Permission**: On first launch of any live audio mode, macOS will request permission under **System Settings → Privacy & Security → Screen & System Audio Recording**.
+
+---
+
+## Models and Downloads
+
+Depending on the engine you use, models are handled differently:
+
+| Engine | Flag | Where it runs | How models are handled |
+| :--- | :--- | :--- | :--- |
+| **Apple Speech** | `--apple` | Apple Neural Engine (macOS) | **No download needed.** Uses built-in macOS speech assets. (If a language isn't installed, enable it in macOS Dictation settings). |
+| **Local Whisper** | `--live --preset <name>` or `--serve` | Apple Metal GPU / CPU | **Auto-downloads on prompt.** If the model file is not found in `~/.cache/whisper-models/`, the CLI prompts to download it from Hugging Face. |
+| **Parakeet** | `--parakeet` or `-p parakeet` | Apple Neural Engine CoreML | **Auto-prompts to install.** Uses `macparakeet-cli`. If missing, prompts to install via Homebrew and downloads the model automatically. |
+| **Moonshine** | `--moonshine` | ONNX Runtime | **Auto-downloads on first run.** Caches models in `~/.cache/whisper-models/moonshine/`. |
+| **Cloud APIs** | Default, `-p openai`, `-p deepgram` | Cloud servers | **No local models.** Requires setting the corresponding API key. |
+
+### Manual Whisper Model Download (Optional)
+
+If you prefer to download `whisper.cpp` models manually instead of letting the CLI do it:
+
+```bash
+mkdir -p ~/.cache/whisper-models
+
+# Large v3 Turbo (~1.6 GB)
+curl -L -o ~/.cache/whisper-models/ggml-large-v3-turbo.bin \
+  "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin"
+
+# Medium (~1.5 GB)
+curl -L -o ~/.cache/whisper-models/ggml-medium.bin \
+  "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium.bin"
+```
+
+---
+
+## Transcribing Audio Files
+
+### Basic Transcription
+```bash
+whisper podcast.mp3
+```
+
+### Specify Spoken Language
+Specify an ISO 639-1 language code (`en`, `es`, `ja`, etc.):
+```bash
+whisper -l es spanish_lesson.mp3
+whisper -l ja anime_raw.mp4
+```
+
+### Choose Provider
+```bash
+# Cloud providers:
+whisper -p groq audio.mp3
+whisper -p openai audio.mp3
+whisper -p deepgram audio.mp3
+
+# Local providers:
+whisper -p parakeet audio.mp3
+whisper -p custom -u http://localhost:8080 audio.mp3
+```
+
+### Output Options
+```bash
+# Print transcript directly to terminal stdout without writing files:
+whisper -s --no-files audio.mp3
+
+# Translate spoken audio to English:
+whisper --translate japanese_audio.mp3
+
+# Generate word-level timestamps (karaoke):
+whisper --karaoke song.mp3
+```
+
+---
+
+## Live System Audio Subtitles (macOS)
+
+Live mode captures audio directly from your system output via `ScreenCaptureKit` and streams text as speech occurs.
+
+### Choosing a Live Engine
+
+#### 1. Apple Speech (`--apple`)
+Uses macOS native `SpeechTranscriber` running on the Apple Neural Engine. Fast word-by-word streaming with zero setup.
+```bash
+whisper --apple -l en
+whisper --apple -l ja
+whisper --apple -l es
+```
+*Note: To add languages, go to **System Settings → Keyboard → Dictation** and enable the language. If offline recognition is needed, enable Siri temporarily to download offline voice assets.*
+
+#### 2. NVIDIA Parakeet TDT (`--parakeet`)
+Uses the Parakeet CoreML model on Apple Silicon via MacParakeet.
+```bash
+whisper --parakeet -l en
+whisper --parakeet -l es
+```
+
+#### 3. Local Whisper Server (`--live --preset <preset>`)
+Spawns and manages a local `whisper-server` process with optimized presets:
+```bash
+# Real-time subtitle preset
+whisper --live --preset live -l en
+
+# Balanced preset (low hallucinations)
+whisper --live --preset balanced -l es
+```
+
+#### 4. Moonshine Streaming (`--moonshine`)
+Runs the Moonshine v2 ONNX engine (requires building with `--features moonshine`):
+```bash
+whisper --moonshine -l en
+whisper --moonshine -l es
+```
+
+#### 5. Cloud Live Streaming (`--live -p groq`)
+Sends rolling audio chunks to cloud APIs:
+```bash
+whisper --live -p groq -l en
+```
+
+### Live Audio Features
+
+- **Smart Speech VAD (`--speech`)**: Uses Apple Neural Engine `SoundAnalysis` and vocal band filtering to ignore background sound effects and music, holding segments open until a sentence finishes.
+  ```bash
+  whisper --live --speech --preset live -l ja
+  ```
+- **Quiet / Headless Mode (`-q`, `--silent`)**: Disables terminal animations, HUD, and text output to minimize CPU usage when you only want to stream subtitles to the browser extension.
+  ```bash
+  whisper --apple -l en -q
+  ```
+- **Save Live Session to Files**: Pass an output name at the end of the command to save `.srt`, `.vtt`, and `.txt` files when exiting with `Ctrl+C`:
+  ```bash
+  whisper --live --preset live -l ja session_01
+  ```
+- **Audio Capture Diagnostic (`--test-audio`)**: Inspect macOS system audio capture with an in-terminal volume waveform:
+  ```bash
+  whisper --test-audio
+  ```
+
+---
+
+## Browser Extension Subtitles
+
+When running any live subtitle mode (`--apple`, `--parakeet`, `--moonshine`, or `--live`), the CLI broadcasts a live Server-Sent Events (SSE) subtitle stream to:
+
+```text
+http://127.0.0.1:8989/events
+```
+
+You can use the companion Chrome and Firefox extension to overlay these subtitles directly onto web video players (YouTube, Crunchyroll, Netflix, etc.):
+
+- Extension repository: **[whisper-cli-sub-injector](https://github.com/aramrw/whisper-cli-sub-injector)**
+
+<img width="377" height="172" alt="Subtitle Overlay Preview" src="https://github.com/user-attachments/assets/5be1d420-0bcf-4af0-91bd-61351834a639" />
+
+You can change the broadcast port using `--sub-port <PORT>`.
+
+---
+
+## Local Server Presets (whisper-cpp)
+
+To run a standalone local `whisper-server` on macOS using Apple Silicon Metal acceleration:
 
 ### 1. Install `whisper-cpp`
 ```bash
 brew install whisper-cpp
 ```
 
-### 2. Download a model file
-* **Medium** (Recommended for speed & high accuracy):
-  ```bash
-  mkdir -p ~/.cache/whisper-models
-  curl -L -o ~/.cache/whisper-models/ggml-medium.bin "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium.bin"
-  ```
-* **Large v3 Turbo**:
-  ```bash
-  curl -L -o ~/.cache/whisper-models/ggml-large-v3-turbo.bin "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin"
-  ```
-
-### 3. Start the Local Server (Using Built-in Presets or Manually)
-
-You can launch `whisper-server` directly through `whisper --serve <preset>` (or auto-start it in the background with `whisper --live --preset <preset>`):
-
+### 2. Start Server with a Preset
+The CLI can manage and launch `whisper-server` using pre-configured presets:
 ```bash
-# Balanced preset (default): low hallucinations, great for Spanish & Japanese
+whisper --serve live -l en
 whisper --serve balanced -l es
-
-# Live preset: ~3x faster encoder window (-ac 512) & no temperature fallback stalls (-nf)
-whisper --serve live -l ja
-
-# Fast preset: ultra-low latency (-ac 384 -nf -bo 1 -bs 1)
-whisper --serve fast -l es
-
-# Accurate preset: 5-way beam search (-bo 5 -bs 5) for maximum quality
-whisper --serve accurate -l ja
 ```
 
-| Preset | Flags Applied | Best For |
+### Preset Details
+
+| Preset | Applied Flags | Use Case |
 | :--- | :--- | :--- |
-| **`balanced`** | `-t 8 -fa -nth 0.5 -mc 0 -sns` | Proven baseline for Spanish & Japanese with very low hallucinations |
-| **`live`** | `balanced` + `-ac 512 -nf -bo 1` | Real-time video/anime subtitles (~3x faster Metal encoder on short chunks) |
-| **`fast`** | `-t 8 -fa -nth 0.45 -mc 0 -sns -ac 384 -nf -bo 1 -bs 1` | Rapid dialogue with minimal subtitle delay (`2.8s` chunks) |
-| **`accurate`** | `-t 8 -fa -nth 0.55 -mc 0 -sns -bo 5 -bs 5` | Full file transcription or difficult audio using 5-beam search |
+| **`balanced`** | `-t 8 -fa -nth 0.5 -mc 0 -sns` | General-purpose baseline with low hallucination rate. |
+| **`live`** | `balanced` + `-ac 512 -nf -bo 1` | Real-time video subtitles; smaller encoder window. |
+| **`fast`** | `-t 8 -fa -nth 0.45 -mc 0 -sns -ac 384 -nf -bo 1 -bs 1` | Low latency for rapid dialogue. |
+| **`realtime`** | `-ac 256 -nf -bo 1 -bs 1` | Minimal delay streaming (~1.8s chunk window). |
+| **`accurate`** | `-t 8 -fa -nth 0.55 -mc 0 -sns -bo 5 -bs 5` | Full context with 5-way beam search for difficult audio. |
 
-> **What Do These `whisper-server` Flags Hook Into? (Applies to ALL `ggml` Whisper Models)**
-> - `-fa` (`--flash-attn`): Enables Flash Attention on Apple Metal GPU.
-> - `-t 8` (`--threads`): Uses 8 CPU performance threads.
-> - `-nth 0.5` (`--no-speech-thold`): Discards segments where `<|nospeech|>` probability exceeds `0.5` (prevents silence/SFX hallucinations).
-> - `-mc 0` (`--max-context`): Resets text context memory between windows so an error never loops indefinitely.
-> - `-sns` (`--suppress-nst`): Masks out non-speech tokens (`[Music]`, `[Laughter]`, `♪`) at the logits level.
-> - `-ac 512` (`--audio-ctx`): Shrinks Whisper's encoder window from the default 30s (`1500` frames) to ~10s (`512` frames) so 3–4s live chunks aren't padded with 26s of silence (**3x–4x speedup**).
-> - `-nf` (`--no-fallback`): Disables multi-pass temperature retry loops (`0.0 → 1.0`) when audio is noisy, preventing 2–3s stalls and high-temperature hallucinations.
-> - `-bo N` / `-bs N`: Controls candidate sampling (`--best-of`) and beam search width (`--beam-size`).
+### Explanation of Server Flags
+- `-fa` (`--flash-attn`): Enables Flash Attention on Apple Silicon Metal GPU.
+- `-t 8` (`--threads`): Allocates 8 CPU threads.
+- `-nth 0.5` (`--no-speech-thold`): Drops segments where silence/non-speech probability is high.
+- `-mc 0` (`--max-context`): Clears context memory between segments to avoid repeating loops.
+- `-sns` (`--suppress-nst`): Suppresses non-speech tokens (`[Music]`, `[Applause]`).
+- `-ac <frames>` (`--audio-ctx`): Reduces audio context size (e.g. `512` frames instead of 30s `1500` frames) to speed up short-chunk encoding.
+- `-nf` (`--no-fallback`): Disables temperature fallback retries, preventing stalls on noisy audio.
+- `-bo` / `-bs`: Sets candidate sampling (`--best-of`) and beam search width (`--beam-size`).
 
-You can also override the model (`-m medium` or `-m /path/to/model.bin`), port (`--port 8081`), or append custom flags (`--server-args "-nth 0.6"`).
-
-## 4. Transcribe files with `whisper-cli`
+You can pass extra server flags using `--server-args`:
 ```bash
-whisper -p custom -u http://localhost:8080 audio.mp3
-```
-> creates  a `.srt` `.vtt` & `.txt` subtitle files.
-
-```bash
-whisper -p custom -u http://localhost:8080 -l es -s audio.mp3
-```
-> `-s` `(--stdout)` displays subs directly in the terminal.
-
-## Moonshine v2 Ultra-Fast live transcribing (`--moonshine`)
-
-> Pros
-
-- **~50-100ms Latency**: Eliminates Whisper's 30-second quadratic attention overhead.
-- **Direct Browser Overlay Broadcast**: Broadcasts live partial and finalized cues to `http://127.0.0.1:8989/events` for the [whisper-cli-sub-injector](https://github.com/aramrw/whisper-cli-sub-injector)
-- **Capitalization & Punctuation**: Moonshine has full sentence level punctuation. 
-- **Automatic Model Caching**: Auto-downloads and caches optimized ONNX models from Moonshine CDN on first launch with no manual setup.
-
-> Cons
-
-- **Accuracy claims to have 4.9% [WER](https://en.wikipedia.org/wiki/Word_error_rate) in Spanish**, in reality it frequently has problems with shows with overlayed sound effects, low quality audio, and other artifacts. In comparison with whisper (for non-macos) realtime transcribing, you're sacrificing near 0.5-2% WER accuracy for line delayed latency. 
-
-```bash
-# Stream live Spanish subtitles (Small Streaming, 4.9% WER)
-whisper --moonshine -l es
-
-# Stream live English subtitles
-whisper --moonshine -l en
-
-# Stream live Japanese subtitles
-whisper --moonshine -l ja
+whisper --serve live --server-args "-nth 0.6"
 ```
 
 ---
 
-## (macOS only) Apple Neural Engine Zero-Lag Streaming (`--apple`)
+## API Key Setup
 
-Run fast and accurate (100-200ms, 1-2% WER accuracy), word by word streaming speech recognition directly on the **Apple Neural Engine (ANE)** using macOS's native `SpeechAnalyzer` + `SpeechTranscriber`:
-
-- **200ms Latency**: Words stream onto your screen as each word is spoken (no chunking, no sliding windows) with very high accuracy and low latency, great for shows & anime. 
-- **100% Local & Zero Model Downloads**: Uses built-in OS speech assets managed by `AssetInventory`.
-- **Direct Browser Overlay Broadcast Compatible**: Broadcasts live word cues to `http://127.0.0.1:8989/events` for the [whisper-cli-sub-injector](https://github.com/aramrw/whisper-cli-sub-injector) extension.
-- **Auto-Pause Finalization**: Commits sentences instantly when you stop/pause the video.
-
-### Download Apple model steps
-1. Enable Dictation in the settings, and select your target language(s).
-2. Enable siri (temporarily), select your target language(s) again and let them download. You can disable siri after (but keep dictation enabled). 
+For cloud transcription providers, set the appropriate environment variable:
 
 ```bash
-# Stream live Spanish subtitles (ultra-low latency)
-whisper --apple -l es
+# Groq (Default)
+export GROQ_API_KEY="gsk_..."
 
-# Stream live Japanese subtitles
-whisper --apple -l ja
+# OpenAI
+export OPENAI_API_KEY="sk-..."
 
-# Stream live English subtitles
-whisper --apple -l en
+# Deepgram
+export DEEPGRAM_API_KEY="..."
+```
+
+Alternatively, pass `-k / --api-key` on the command line:
+```bash
+whisper -k "gsk_..." audio.mp3
 ```
 
 ---
 
-## Live Real-Time macOS System Audio Subtitles (`--live`)
-
-Stream live subtitles directly from any app playing audio on your Mac (Crunchyroll, YouTube, podcasts, video calls) using native macOS `ScreenCaptureKit`—**no BlackHole or virtual audio routing required**.
-
-> **First-Time Permission**: On first run, macOS will ask to allow your terminal app under **System Settings → Privacy & Security → Screen & System Audio Recording**.
-
-### One-Command Live Mode (Auto-Starts `whisper-server` in Background)
-```bash
-# Spanish live subtitles (auto-starts whisper-server with the 'live' preset)
-whisper --live --preset live -l es
-
-# Japanese live subtitles (e.g. Crunchyroll / Anime)
-whisper --live --preset live -l ja
-
-# Using your 'balanced' preset
-whisper --live --preset balanced -l es
-```
-
-### Smart Sentence Mode (`--speech` — Ignores Anime SFX/Music & Waits for Sentence End)
-Uses Apple's Neural Engine `SoundAnalysis` framework + a `300Hz–3400Hz` vocal-band tracker to distinguish human voices from explosions/music and hold long sentences open until the character finishes speaking:
-```bash
-whisper --live --speech --preset live -l es
-whisper --live --speech --preset live -l ja
-```
-
-### Connect to an Already-Running `whisper-server`
-```bash
-whisper --live --speech -p custom -l es
-whisper --live --speech -p custom -l ja
-```
-
-### Live Subtitles Translated to English in Real Time
-```bash
-whisper --live --speech --preset live -l ja --translate
-```
-
-### Live Subtitles with Groq Cloud (Ultra-Low Latency)
-```bash
-whisper --live --speech -p groq -l es
-```
-
-### Test macOS System Audio Capture & Waveform Monitor
-```bash
-whisper --test-audio
-```
-
-### Save Live Session to `.srt`, `.vtt`, and `.txt` on Exit (`Ctrl+C`)
-```bash
-whisper --live --preset live -l ja episode_01
-```
-
----
-
-## API Key Setup (Cloud Providers)
-
-Set the environment variable for your preferred provider:
-
-* **Groq** (Default - recommended for speed & free tier):
-  ```bash
-  export GROQ_API_KEY="gsk_..."
-  ```
-* **OpenAI**:
-  ```bash
-  export OPENAI_API_KEY="sk-..."
-  ```
-* **Deepgram**:
-  ```bash
-  export DEEPGRAM_API_KEY="..."
-  ```
-
-Alternatively, pass `-k / --api-key` directly on the command line.
-
----
-
-## Usage Examples
-
-### 1. Transcribe with Groq (Default)
-```bash
-whisper video.mp4
-```
-
-### 2. Specify Language (e.g. Spanish, Japanese, English)
-```bash
-whisper -l es spanish_audio.mp3
-whisper -l ja anime_clip.mp4
-whisper -l en podcast.m4a
-```
-
-### 3. Generate `.srt`, `.vtt`, and `.txt` Files locally via `whisper-server`
-```bash
-whisper -p custom -u http://localhost:8080 -l es ~/Downloads/video.mp4
-```
-
-### 4. Print Directly to Terminal Stdout (No Files Created)
-```bash
-whisper -s -p custom -u http://localhost:8080 audio.mp3
-```
-
-### 5. Generate Word-Level Subtitles (Karaoke mode)
-```bash
-whisper --karaoke video.mp4
-```
-
-### 6. Translate Audio to English
-```bash
-whisper --translate video.mp4
-```
-
----
-
-## CLI Options (`whisper --help`)
+## CLI Reference
 
 ```text
-Generate a transcript of an audio file, launch a local whisper-server with tuned presets, or stream real-time subtitles from macOS system audio using Groq, OpenAI, Deepgram, or a custom OpenAI-compatible API endpoint (like whisper-server).
-
 Usage: whisper [OPTIONS] [AUDIO]
 
 Arguments:
-  [AUDIO]  Path to the audio file to transcribe (optional when using --live, --serve, or --test-audio)
+  [AUDIO]  Path to the audio file to transcribe (or output base name in live mode)
 
 Options:
-  -p, --provider <PROVIDER>          Speech-to-Text provider to use (groq, openai, deepgram, custom) [default: groq]
-  -m, --model <MODEL>                Name or path of the model to use (e.g. large-v3-turbo, medium, whisper-1, nova-3)
-  -l, --lang <LANG>                  Language spoken in the audio (ISO 639-1 code e.g. 'en', 'es', 'ja')
-      --live                         Capture macOS system audio in real time and stream subtitles to the terminal
-      --serve [<SERVE>]              Launch local whisper-server in the foreground using a preset (balanced, live, fast, accurate)
-      --preset <PRESET>              Server preset to use (auto-starts background whisper-server when used with --live)
-      --port <PORT>                  Port for local whisper-server (used with --serve and --preset) [default: 8080]
-      --server-args <SERVER_ARGS>    Extra raw flags to append to whisper-server (e.g. --server-args "-nth 0.6 -ac 256")
-      --test-audio                   Test macOS system audio capture with a live waveform & byte monitor
-      --chunk-secs <CHUNK_SECS>      Maximum audio chunk duration in seconds for --live mode
-  -k, --api-key <API_KEY>            API Key (defaults to GROQ_API_KEY, OPENAI_API_KEY, or DEEPGRAM_API_KEY env var)
-  -u, --api-url <API_URL>            Custom API Base URL for local/self-hosted OpenAI-compatible speech-to-text endpoints
-  -t, --translate                    Toggle translation to English
-      --karaoke                      Generate timestamps for each word
-  -s, --stdout                       Print transcript directly to terminal stdout
-      --no-files                     Skip writing .txt, .vtt, and .srt files to disk
-  -h, --help                         Print help
-  -V, --version                      Print version
+  -p, --provider <PROVIDER>        Speech-to-Text provider (groq, openai, deepgram, parakeet, custom) [default: groq]
+  -m, --model <MODEL>              Name or path of model to use
+  -l, --lang <LANG>                Language code (ISO 639-1, e.g. 'en', 'es', 'ja')
+
+Live & Streaming:
+      --apple                      Use native Apple Speech on Apple Neural Engine (macOS only)
+      --parakeet                   Use NVIDIA Parakeet TDT CoreML via MacParakeet (macOS only)
+      --moonshine                  Use Moonshine v2 streaming ONNX engine
+      --live                       Capture macOS system audio in real time
+      --speech                     Wait for speaker sentence pauses and filter background SFX/music
+      --test-audio                 Test system audio capture with terminal waveform monitor
+      --chunk-secs <CHUNK_SECS>    Maximum audio chunk duration in seconds for live mode
+      --sub-port <SUB_PORT>        Port for HTTP/SSE subtitle broadcasting [default: 8989]
+  -q, --silent                     Headless mode (disables terminal HUD to reduce CPU usage)
+
+Server & Presets:
+      --serve [<PRESET>]           Launch whisper-server in foreground (balanced, live, fast, realtime, accurate)
+      --preset <PRESET>            Auto-start background whisper-server when used with --live
+      --port <PORT>                Port for local whisper-server [default: 8080]
+      --server-args <ARGS>         Extra flags to pass to whisper-server
+
+Output & Formatting:
+  -t, --translate                  Translate speech to English
+      --karaoke                    Generate word-level timestamps
+  -s, --stdout                     Print transcript directly to terminal stdout
+      --no-files                   Skip writing .txt, .vtt, and .srt files
+
+Connection:
+  -k, --api-key <API_KEY>          API key for cloud provider
+  -u, --api-url <API_URL>          Custom API base URL (defaults to http://localhost:8080 for custom)
+
+General:
+  -h, --help                       Print help
+  -V, --version                    Print version
 ```
 
 ---
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+MIT License. See [LICENSE](LICENSE) for details.
